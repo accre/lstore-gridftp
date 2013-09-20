@@ -1,0 +1,16 @@
+#!/bin/sh
+
+if [ -e ${prefix}/share/gridftp-lfs/gridftp-lfs-environment ] ; then
+    . ${prefix}/share/gridftp-lfs/gridftp-lfs-environment
+fi
+
+if [ -e /home/meloam/ANSE/local/etc/gridftp-lfs/gridftp-lfs-local.conf ] ; then
+    . /home/meloam/ANSE/local/etc/gridftp-lfs/gridftp-lfs-local.conf
+fi
+
+if [ -e /home/meloam/ANSE/local/etc/sysconfig/gridftp-lfs ] ; then
+    . /home/meloam/ANSE/local/etc/sysconfig/gridftp-lfs
+fi
+
+exec /usr/sbin/globus-gridftp-server -c /home/meloam/ANSE/local/etc/gridftp-lfs/gridftp-inetd.conf -dsi lfs
+

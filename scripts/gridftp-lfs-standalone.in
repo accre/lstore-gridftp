@@ -1,0 +1,18 @@
+#!/bin/sh                                                            
+
+if [ -e @datadir_resolved@/gridftp-lfs/gridftp-lfs-environment ] ; then
+    . @datadir_resolved@/gridftp-lfs/gridftp-lfs-environment
+fi
+
+if [ -e @sysconfdir_resolved@/gridftp-lfs/gridftp-lfs-local.conf ] ; then
+    . @sysconfdir_resolved@/gridftp-lfs/gridftp-lfs-local.conf
+fi
+
+if [ -e @sysconfdir_resolved@/sysconfig/gridftp-lfs ] ; then
+    . @sysconfdir_resolved@/sysconfig/gridftp-lfs
+fi
+
+export CLASSPATH=$CLASSPATH
+                                                                      
+exec /usr/sbin/globus-gridftp-server -c @sysconfdir_resolved@/gridftp-lfs/gridftp-debug.conf -dsi lfs -no-fork
+
