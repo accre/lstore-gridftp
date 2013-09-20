@@ -3,7 +3,6 @@
 *~
 *.o
 Makefile
-Makefile.in
 Makefile.msc
 aclocal.m4
 *.lo
