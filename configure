@@ -914,8 +914,8 @@ with_pic
 enable_fast_install
 with_gnu_ld
 enable_libtool_lock
-with_lio
 with_globus
+with_lio
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1570,8 +1570,8 @@ Optional Packages:
   --with-pic              try to use only PIC/non-PIC objects [default=use
                           both]
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
-  --with-lio= Location of LIO installation
   --with-globus=GLOBUS_LOCATION Location of globus
+  --with-lio= Location of LIO installation
 
 Some influential environment variables:
   CC          C compiler command
@@ -11085,110 +11085,6 @@ CC="$lt_save_CC"
 #AS_IF([ test -e ${JAVA_HOME}/jre/lib/amd64 ], LDFLAGS=["$LDFLAGS -L${JAVA_HOME}/jre/lib/amd64 -L${JAVA_HOME}/jre/lib/amd64/server"])
 #AS_IF([ test -e ${JAVA_HOME}/jre/lib/i386 ], LDFLAGS=["$LDFLAGS -L${JAVA_HOME}/jre/lib/i386 -L${JAVA_HOME}/jre/lib/i386/server"])
 
-
-# Check whether --with-lio was given.
-if test "${with_lio+set}" = set; then
-  withval=$with_lio; LIOHOME=${withval}
-else
-  LIOHOME=$LIO_HOME
-fi
-
-as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/lio/lio.h" | $as_tr_sh`
-{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/lio/lio.h" >&5
-$as_echo_n "checking for ${LIOHOME}/include/lio/lio.h... " >&6; }
-if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
-  $as_echo_n "(cached) " >&6
-else
-  test "$cross_compiling" = yes &&
-  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
-$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
-   { (exit 1); exit 1; }; }
-if test -r "${LIOHOME}/include/lio/lio.h"; then
-  eval "$as_ac_File=yes"
-else
-  eval "$as_ac_File=no"
-fi
-fi
-ac_res=`eval 'as_val=${'$as_ac_File'}
-		 $as_echo "$as_val"'`
-	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
-$as_echo "$ac_res" >&6; }
-as_val=`eval 'as_val=${'$as_ac_File'}
-		 $as_echo "$as_val"'`
-   if test "x$as_val" = x""yes; then
-  INCLUDE="$INCLUDE -I${LIOHOME}/include/lio"
-fi
-
-as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/lib/liblio.so" | $as_tr_sh`
-{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/lib/liblio.so" >&5
-$as_echo_n "checking for ${LIOHOME}/lib/liblio.so... " >&6; }
-if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
-  $as_echo_n "(cached) " >&6
-else
-  test "$cross_compiling" = yes &&
-  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
-$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
-   { (exit 1); exit 1; }; }
-if test -r "${LIOHOME}/lib/liblio.so"; then
-  eval "$as_ac_File=yes"
-else
-  eval "$as_ac_File=no"
-fi
-fi
-ac_res=`eval 'as_val=${'$as_ac_File'}
-		 $as_echo "$as_val"'`
-	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
-$as_echo "$ac_res" >&6; }
-as_val=`eval 'as_val=${'$as_ac_File'}
-		 $as_echo "$as_val"'`
-   if test "x$as_val" = x""yes; then
-  LDFLAGS="$LDFLAGS -L${LIOHOME}/lib"
-fi
-
-# Try and find APR
-{ $as_echo "$as_me:$LINENO: checking for /usr/include/apr-1/apr_thread_pool.h" >&5
-$as_echo_n "checking for /usr/include/apr-1/apr_thread_pool.h... " >&6; }
-if test "${ac_cv_file__usr_include_apr_1_apr_thread_pool_h+set}" = set; then
-  $as_echo_n "(cached) " >&6
-else
-  test "$cross_compiling" = yes &&
-  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
-$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
-   { (exit 1); exit 1; }; }
-if test -r "/usr/include/apr-1/apr_thread_pool.h"; then
-  ac_cv_file__usr_include_apr_1_apr_thread_pool_h=yes
-else
-  ac_cv_file__usr_include_apr_1_apr_thread_pool_h=no
-fi
-fi
-{ $as_echo "$as_me:$LINENO: result: $ac_cv_file__usr_include_apr_1_apr_thread_pool_h" >&5
-$as_echo "$ac_cv_file__usr_include_apr_1_apr_thread_pool_h" >&6; }
-if test "x$ac_cv_file__usr_include_apr_1_apr_thread_pool_h" = x""yes; then
-  INCLUDE="$INCLUDE -I/usr/include/apr-1"
-fi
-
-{ $as_echo "$as_me:$LINENO: checking for /usr/local/include/apr-1/apr_thread_pool.h" >&5
-$as_echo_n "checking for /usr/local/include/apr-1/apr_thread_pool.h... " >&6; }
-if test "${ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h+set}" = set; then
-  $as_echo_n "(cached) " >&6
-else
-  test "$cross_compiling" = yes &&
-  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
-$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
-   { (exit 1); exit 1; }; }
-if test -r "/usr/local/include/apr-1/apr_thread_pool.h"; then
-  ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h=yes
-else
-  ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h=no
-fi
-fi
-{ $as_echo "$as_me:$LINENO: result: $ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h" >&5
-$as_echo "$ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h" >&6; }
-if test "x$ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h" = x""yes; then
-  INCLUDE="$INCLUDE -I/usr/local/include/apr-1"
-fi
-
-
 # EPEL5 defaults
 { $as_echo "$as_me:$LINENO: checking for /usr/include/globus" >&5
 $as_echo_n "checking for /usr/include/globus... " >&6; }
@@ -11343,6 +11239,242 @@ as_val=`eval 'as_val=${'$as_ac_File'}
 fi
 
 
+# Pull LIO
+
+# Check whether --with-lio was given.
+if test "${with_lio+set}" = set; then
+  withval=$with_lio; LIOHOME=${withval}
+else
+  LIOHOME=$LIO_HOME
+fi
+
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/lio/lio.h" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/lio/lio.h" >&5
+$as_echo_n "checking for ${LIOHOME}/include/lio/lio.h... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/include/lio/lio.h"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  INCLUDE="$INCLUDE -I${LIOHOME}/include"
+fi
+
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/lio/lio.h" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/lio/lio.h" >&5
+$as_echo_n "checking for ${LIOHOME}/include/lio/lio.h... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/include/lio/lio.h"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  INCLUDE="$INCLUDE -I${LIOHOME}/include/lio"
+fi
+
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/ibp/ibp.h" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/ibp/ibp.h" >&5
+$as_echo_n "checking for ${LIOHOME}/include/ibp/ibp.h... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/include/ibp/ibp.h"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  INCLUDE="$INCLUDE -I${LIOHOME}/include/ibp"
+fi
+
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/gop/gop_config.h" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/gop/gop_config.h" >&5
+$as_echo_n "checking for ${LIOHOME}/include/gop/gop_config.h... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/include/gop/gop_config.h"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  INCLUDE="$INCLUDE -I${LIOHOME}/include/gop"
+fi
+
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/toolbox/toolbox_config.h" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/toolbox/toolbox_config.h" >&5
+$as_echo_n "checking for ${LIOHOME}/include/toolbox/toolbox_config.h... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/include/toolbox/toolbox_config.h"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  INCLUDE="$INCLUDE -I${LIOHOME}/include/toolbox"
+fi
+
+# Try and find APR
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/include/apr-1/apr_thread_pool.h" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/include/apr-1/apr_thread_pool.h" >&5
+$as_echo_n "checking for ${LIOHOME}/include/apr-1/apr_thread_pool.h... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/include/apr-1/apr_thread_pool.h"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  INCLUDE="$INCLUDE -I${LIOHOME}/include/apr-1"
+fi
+
+{ $as_echo "$as_me:$LINENO: checking for /usr/include/apr-1/apr_thread_pool.h" >&5
+$as_echo_n "checking for /usr/include/apr-1/apr_thread_pool.h... " >&6; }
+if test "${ac_cv_file__usr_include_apr_1_apr_thread_pool_h+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "/usr/include/apr-1/apr_thread_pool.h"; then
+  ac_cv_file__usr_include_apr_1_apr_thread_pool_h=yes
+else
+  ac_cv_file__usr_include_apr_1_apr_thread_pool_h=no
+fi
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_file__usr_include_apr_1_apr_thread_pool_h" >&5
+$as_echo "$ac_cv_file__usr_include_apr_1_apr_thread_pool_h" >&6; }
+if test "x$ac_cv_file__usr_include_apr_1_apr_thread_pool_h" = x""yes; then
+  INCLUDE="$INCLUDE -I/usr/include/apr-1"
+fi
+
+{ $as_echo "$as_me:$LINENO: checking for /usr/local/include/apr-1/apr_thread_pool.h" >&5
+$as_echo_n "checking for /usr/local/include/apr-1/apr_thread_pool.h... " >&6; }
+if test "${ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "/usr/local/include/apr-1/apr_thread_pool.h"; then
+  ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h=yes
+else
+  ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h=no
+fi
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h" >&5
+$as_echo "$ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h" >&6; }
+if test "x$ac_cv_file__usr_local_include_apr_1_apr_thread_pool_h" = x""yes; then
+  INCLUDE="$INCLUDE -I/usr/local/include/apr-1"
+fi
+
+
+as_ac_File=`$as_echo "ac_cv_file_${LIOHOME}/lib/liblio.so" | $as_tr_sh`
+{ $as_echo "$as_me:$LINENO: checking for ${LIOHOME}/lib/liblio.so" >&5
+$as_echo_n "checking for ${LIOHOME}/lib/liblio.so... " >&6; }
+if { as_var=$as_ac_File; eval "test \"\${$as_var+set}\" = set"; }; then
+  $as_echo_n "(cached) " >&6
+else
+  test "$cross_compiling" = yes &&
+  { { $as_echo "$as_me:$LINENO: error: cannot check for file existence when cross compiling" >&5
+$as_echo "$as_me: error: cannot check for file existence when cross compiling" >&2;}
+   { (exit 1); exit 1; }; }
+if test -r "${LIOHOME}/lib/liblio.so"; then
+  eval "$as_ac_File=yes"
+else
+  eval "$as_ac_File=no"
+fi
+fi
+ac_res=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+	       { $as_echo "$as_me:$LINENO: result: $ac_res" >&5
+$as_echo "$ac_res" >&6; }
+as_val=`eval 'as_val=${'$as_ac_File'}
+		 $as_echo "$as_val"'`
+   if test "x$as_val" = x""yes; then
+  LDFLAGS="$LDFLAGS -L${LIOHOME}/lib"
+fi
+
+
 # Checks for libraries.
 
 { $as_echo "$as_me:$LINENO: checking for inflateInit_ in -lz" >&5
@@ -11424,13 +11556,13 @@ $as_echo "$as_me: error: Couldn't find zlib" >&2;}
 fi
 
 
-{ $as_echo "$as_me:$LINENO: checking for SHA512_Final in -lssl" >&5
-$as_echo_n "checking for SHA512_Final in -lssl... " >&6; }
-if test "${ac_cv_lib_ssl_SHA512_Final+set}" = set; then
+{ $as_echo "$as_me:$LINENO: checking for CRYPTO_malloc in -lcrypto" >&5
+$as_echo_n "checking for CRYPTO_malloc in -lcrypto... " >&6; }
+if test "${ac_cv_lib_crypto_CRYPTO_malloc+set}" = set; then
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lssl  $LIBS"
+LIBS="-lcrypto  $LIBS"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -11444,11 +11576,11 @@ cat >>conftest.$ac_ext <<_ACEOF
 #ifdef __cplusplus
 extern "C"
 #endif
-char SHA512_Final ();
+char CRYPTO_malloc ();
 int
 main ()
 {
-return SHA512_Final ();
+return CRYPTO_malloc ();
   ;
   return 0;
 }
@@ -11474,12 +11606,12 @@ $as_echo "$ac_try_echo") >&5
 	 test "$cross_compiling" = yes ||
 	 $as_test_x conftest$ac_exeext
        }; then
-  ac_cv_lib_ssl_SHA512_Final=yes
+  ac_cv_lib_crypto_CRYPTO_malloc=yes
 else
   $as_echo "$as_me: failed program was:" >&5
 sed 's/^/| /' conftest.$ac_ext >&5
 
-	ac_cv_lib_ssl_SHA512_Final=no
+	ac_cv_lib_crypto_CRYPTO_malloc=no
 fi
 
 rm -rf conftest.dSYM
@@ -11487,9 +11619,246 @@ rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
       conftest$ac_exeext conftest.$ac_ext
 LIBS=$ac_check_lib_save_LIBS
 fi
-{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_ssl_SHA512_Final" >&5
-$as_echo "$ac_cv_lib_ssl_SHA512_Final" >&6; }
-if test "x$ac_cv_lib_ssl_SHA512_Final" = x""yes; then
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_crypto_CRYPTO_malloc" >&5
+$as_echo "$ac_cv_lib_crypto_CRYPTO_malloc" >&6; }
+if test "x$ac_cv_lib_crypto_CRYPTO_malloc" = x""yes; then
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBCRYPTO 1
+_ACEOF
+
+  LIBS="-lcrypto $LIBS"
+
+else
+  { { $as_echo "$as_me:$LINENO: error: Couldn't find libcrypto" >&5
+$as_echo "$as_me: error: Couldn't find libcrypto" >&2;}
+   { (exit 1); exit 1; }; }
+fi
+
+
+{ $as_echo "$as_me:$LINENO: checking for dlclose in -ldl" >&5
+$as_echo_n "checking for dlclose in -ldl... " >&6; }
+if test "${ac_cv_lib_dl_dlclose+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-ldl  $LIBS"
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char dlclose ();
+int
+main ()
+{
+return dlclose ();
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval ac_try_echo="\"\$as_me:$LINENO: $ac_try_echo\""
+$as_echo "$ac_try_echo") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext && {
+	 test "$cross_compiling" = yes ||
+	 $as_test_x conftest$ac_exeext
+       }; then
+  ac_cv_lib_dl_dlclose=yes
+else
+  $as_echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_lib_dl_dlclose=no
+fi
+
+rm -rf conftest.dSYM
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_dl_dlclose" >&5
+$as_echo "$ac_cv_lib_dl_dlclose" >&6; }
+if test "x$ac_cv_lib_dl_dlclose" = x""yes; then
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBDL 1
+_ACEOF
+
+  LIBS="-ldl $LIBS"
+
+else
+  { { $as_echo "$as_me:$LINENO: error: Couldn't find dl" >&5
+$as_echo "$as_me: error: Couldn't find dl" >&2;}
+   { (exit 1); exit 1; }; }
+fi
+
+
+{ $as_echo "$as_me:$LINENO: checking for xmlNewNode in -lxml2" >&5
+$as_echo_n "checking for xmlNewNode in -lxml2... " >&6; }
+if test "${ac_cv_lib_xml2_xmlNewNode+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lxml2  $LIBS"
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char xmlNewNode ();
+int
+main ()
+{
+return xmlNewNode ();
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval ac_try_echo="\"\$as_me:$LINENO: $ac_try_echo\""
+$as_echo "$ac_try_echo") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext && {
+	 test "$cross_compiling" = yes ||
+	 $as_test_x conftest$ac_exeext
+       }; then
+  ac_cv_lib_xml2_xmlNewNode=yes
+else
+  $as_echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_lib_xml2_xmlNewNode=no
+fi
+
+rm -rf conftest.dSYM
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_xml2_xmlNewNode" >&5
+$as_echo "$ac_cv_lib_xml2_xmlNewNode" >&6; }
+if test "x$ac_cv_lib_xml2_xmlNewNode" = x""yes; then
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBXML2 1
+_ACEOF
+
+  LIBS="-lxml2 $LIBS"
+
+else
+  { { $as_echo "$as_me:$LINENO: error: Couldn't find xml2" >&5
+$as_echo "$as_me: error: Couldn't find xml2" >&2;}
+   { (exit 1); exit 1; }; }
+fi
+
+
+{ $as_echo "$as_me:$LINENO: checking for SSL_SESSION_new in -lssl" >&5
+$as_echo_n "checking for SSL_SESSION_new in -lssl... " >&6; }
+if test "${ac_cv_lib_ssl_SSL_SESSION_new+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lssl  $LIBS"
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char SSL_SESSION_new ();
+int
+main ()
+{
+return SSL_SESSION_new ();
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval ac_try_echo="\"\$as_me:$LINENO: $ac_try_echo\""
+$as_echo "$ac_try_echo") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext && {
+	 test "$cross_compiling" = yes ||
+	 $as_test_x conftest$ac_exeext
+       }; then
+  ac_cv_lib_ssl_SSL_SESSION_new=yes
+else
+  $as_echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_lib_ssl_SSL_SESSION_new=no
+fi
+
+rm -rf conftest.dSYM
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_ssl_SSL_SESSION_new" >&5
+$as_echo "$ac_cv_lib_ssl_SSL_SESSION_new" >&6; }
+if test "x$ac_cv_lib_ssl_SSL_SESSION_new" = x""yes; then
   cat >>confdefs.h <<_ACEOF
 #define HAVE_LIBSSL 1
 _ACEOF
@@ -11504,13 +11873,92 @@ fi
 
 #AC_CHECK_LIB([APR], [], ,[AC_MSG_ERROR(Couldn't find )], [-lapr-1])
 
-{ $as_echo "$as_me:$LINENO: checking for apr_hash_clear in -laprutil-1" >&5
-$as_echo_n "checking for apr_hash_clear in -laprutil-1... " >&6; }
-if test "${ac_cv_lib_aprutil_1_apr_hash_clear+set}" = set; then
+{ $as_echo "$as_me:$LINENO: checking for apr_thread_pool_create in -laprutil-1" >&5
+$as_echo_n "checking for apr_thread_pool_create in -laprutil-1... " >&6; }
+if test "${ac_cv_lib_aprutil_1_apr_thread_pool_create+set}" = set; then
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
 LIBS="-laprutil-1  $LIBS"
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char apr_thread_pool_create ();
+int
+main ()
+{
+return apr_thread_pool_create ();
+  ;
+  return 0;
+}
+_ACEOF
+rm -f conftest.$ac_objext conftest$ac_exeext
+if { (ac_try="$ac_link"
+case "(($ac_try" in
+  *\"* | *\`* | *\\*) ac_try_echo=\$ac_try;;
+  *) ac_try_echo=$ac_try;;
+esac
+eval ac_try_echo="\"\$as_me:$LINENO: $ac_try_echo\""
+$as_echo "$ac_try_echo") >&5
+  (eval "$ac_link") 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  $as_echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } && {
+	 test -z "$ac_c_werror_flag" ||
+	 test ! -s conftest.err
+       } && test -s conftest$ac_exeext && {
+	 test "$cross_compiling" = yes ||
+	 $as_test_x conftest$ac_exeext
+       }; then
+  ac_cv_lib_aprutil_1_apr_thread_pool_create=yes
+else
+  $as_echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+	ac_cv_lib_aprutil_1_apr_thread_pool_create=no
+fi
+
+rm -rf conftest.dSYM
+rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
+      conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_aprutil_1_apr_thread_pool_create" >&5
+$as_echo "$ac_cv_lib_aprutil_1_apr_thread_pool_create" >&6; }
+if test "x$ac_cv_lib_aprutil_1_apr_thread_pool_create" = x""yes; then
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBAPRUTIL_1 1
+_ACEOF
+
+  LIBS="-laprutil-1 $LIBS"
+
+else
+  { { $as_echo "$as_me:$LINENO: error: Couldn't find APR-Util " >&5
+$as_echo "$as_me: error: Couldn't find APR-Util " >&2;}
+   { (exit 1); exit 1; }; }
+fi
+
+
+{ $as_echo "$as_me:$LINENO: checking for apr_hash_clear in -lapr-1" >&5
+$as_echo_n "checking for apr_hash_clear in -lapr-1... " >&6; }
+if test "${ac_cv_lib_apr_1_apr_hash_clear+set}" = set; then
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lapr-1  $LIBS"
 cat >conftest.$ac_ext <<_ACEOF
 /* confdefs.h.  */
 _ACEOF
@@ -11554,12 +12002,12 @@ $as_echo "$ac_try_echo") >&5
 	 test "$cross_compiling" = yes ||
 	 $as_test_x conftest$ac_exeext
        }; then
-  ac_cv_lib_aprutil_1_apr_hash_clear=yes
+  ac_cv_lib_apr_1_apr_hash_clear=yes
 else
   $as_echo "$as_me: failed program was:" >&5
 sed 's/^/| /' conftest.$ac_ext >&5
 
-	ac_cv_lib_aprutil_1_apr_hash_clear=no
+	ac_cv_lib_apr_1_apr_hash_clear=no
 fi
 
 rm -rf conftest.dSYM
@@ -11567,14 +12015,14 @@ rm -f core conftest.err conftest.$ac_objext conftest_ipa8_conftest.oo \
       conftest$ac_exeext conftest.$ac_ext
 LIBS=$ac_check_lib_save_LIBS
 fi
-{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_aprutil_1_apr_hash_clear" >&5
-$as_echo "$ac_cv_lib_aprutil_1_apr_hash_clear" >&6; }
-if test "x$ac_cv_lib_aprutil_1_apr_hash_clear" = x""yes; then
+{ $as_echo "$as_me:$LINENO: result: $ac_cv_lib_apr_1_apr_hash_clear" >&5
+$as_echo "$ac_cv_lib_apr_1_apr_hash_clear" >&6; }
+if test "x$ac_cv_lib_apr_1_apr_hash_clear" = x""yes; then
   cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBAPRUTIL_1 1
+#define HAVE_LIBAPR_1 1
 _ACEOF
 
-  LIBS="-laprutil-1 $LIBS"
+  LIBS="-lapr-1 $LIBS"
 
 else
   { { $as_echo "$as_me:$LINENO: error: Couldn't find APR-Util " >&5

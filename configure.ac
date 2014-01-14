@@ -23,13 +23,6 @@ AC_PROG_LIBTOOL
 #AS_IF([ test -e ${JAVA_HOME}/jre/lib/amd64 ], LDFLAGS=["$LDFLAGS -L${JAVA_HOME}/jre/lib/amd64 -L${JAVA_HOME}/jre/lib/amd64/server"])
 #AS_IF([ test -e ${JAVA_HOME}/jre/lib/i386 ], LDFLAGS=["$LDFLAGS -L${JAVA_HOME}/jre/lib/i386 -L${JAVA_HOME}/jre/lib/i386/server"])
 
-AC_ARG_WITH(lio, [  --with-lio= Location of LIO installation], [LIOHOME=${withval}], [LIOHOME=$LIO_HOME])
-AC_CHECK_FILE(${LIOHOME}/include/lio/lio.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include/lio"],)
-AC_CHECK_FILE(${LIOHOME}/lib/liblio.so, LDFLAGS=["$LDFLAGS -L${LIOHOME}/lib"],)
-# Try and find APR
-AC_CHECK_FILE(/usr/include/apr-1/apr_thread_pool.h, INCLUDE=["$INCLUDE -I/usr/include/apr-1"])
-AC_CHECK_FILE(/usr/local/include/apr-1/apr_thread_pool.h, INCLUDE=["$INCLUDE -I/usr/local/include/apr-1"])
-
 # EPEL5 defaults
 AC_CHECK_FILE(/usr/include/globus, INCLUDE=["$INCLUDE -I/usr/include/globus"])
 AC_CHECK_FILE(/usr/lib64/globus/include, INCLUDE=["$INCLUDE -I/usr/lib64/globus/include"])
@@ -40,11 +33,29 @@ AC_CHECK_FILE(${GLOBUSLOCATION}, ,[GLOBUSLOCATION=/opt/globus])
 AC_CHECK_FILE(${GLOBUSLOCATION}/include/gcc64, INCLUDE=["$INCLUDE -I${GLOBUSLOCATION}/include/gcc64"])
 AC_CHECK_FILE(${GLOBUSLOCATION}/include/gcc32, INCLUDE=["$INCLUDE -I${GLOBUSLOCATION}/include/gcc32"])
 
+# Pull LIO
+AC_ARG_WITH(lio, [  --with-lio= Location of LIO installation], [LIOHOME=${withval}], [LIOHOME=$LIO_HOME])
+AC_CHECK_FILE(${LIOHOME}/include/lio/lio.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include"],)
+AC_CHECK_FILE(${LIOHOME}/include/lio/lio.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include/lio"],)
+AC_CHECK_FILE(${LIOHOME}/include/ibp/ibp.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include/ibp"],)
+AC_CHECK_FILE(${LIOHOME}/include/gop/gop_config.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include/gop"],)
+AC_CHECK_FILE(${LIOHOME}/include/toolbox/toolbox_config.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include/toolbox"],)
+# Try and find APR
+AC_CHECK_FILE(${LIOHOME}/include/apr-1/apr_thread_pool.h, INCLUDE=["$INCLUDE -I${LIOHOME}/include/apr-1"])
+AC_CHECK_FILE(/usr/include/apr-1/apr_thread_pool.h, INCLUDE=["$INCLUDE -I/usr/include/apr-1"])
+AC_CHECK_FILE(/usr/local/include/apr-1/apr_thread_pool.h, INCLUDE=["$INCLUDE -I/usr/local/include/apr-1"])
+
+AC_CHECK_FILE(${LIOHOME}/lib/liblio.so, LDFLAGS=["$LDFLAGS -L${LIOHOME}/lib"],)
+
 # Checks for libraries.
-AC_CHECK_LIB([z], [inflateInit_], , [AC_MSG_ERROR(Couldn't find zlib)], )
-AC_CHECK_LIB([ssl], [SHA512_Final], ,[AC_MSG_ERROR(Couldn't find OpenSSL)])
+AC_CHECK_LIB([z], [inflateInit_], , [AC_MSG_ERROR(Couldn't find zlib)])
+AC_CHECK_LIB([crypto], [CRYPTO_malloc], ,[AC_MSG_ERROR(Couldn't find libcrypto)])
+AC_CHECK_LIB([dl], [dlclose], ,[AC_MSG_ERROR(Couldn't find dl)])
+AC_CHECK_LIB([xml2], [xmlNewNode], ,[AC_MSG_ERROR(Couldn't find xml2)])
+AC_CHECK_LIB([ssl], [SSL_SESSION_new], ,[AC_MSG_ERROR(Couldn't find OpenSSL)])
 #AC_CHECK_LIB([APR], [], ,[AC_MSG_ERROR(Couldn't find )], [-lapr-1])
-AC_CHECK_LIB([aprutil-1], [apr_hash_clear], ,[AC_MSG_ERROR(Couldn't find APR-Util )] )
+AC_CHECK_LIB([aprutil-1], [apr_thread_pool_create], ,[AC_MSG_ERROR(Couldn't find APR-Util )] )
+AC_CHECK_LIB([apr-1], [apr_hash_clear], ,[AC_MSG_ERROR(Couldn't find APR-Util )] )
 #AC_CHECK_LIB([ZMQ], [], ,[AC_MSG_ERROR(Couldn't find )], [-lzmq])
 AC_CHECK_LIB([czmq], [zmq_msg_data], ,[AC_MSG_ERROR(Couldn't find CZMQ)] )
 AC_CHECK_LIB([fuse], [fuse_get_context], ,[AC_MSG_ERROR(Couldn't find FUSE)] )
