@@ -43,12 +43,8 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         return lfs_handle->done_status;
     }
 
-    // Only close the file for successful transfers and if the handle is valid.
-    // This might cause long-term leaks, but Java has been crash-y when closing
-    // invalid handles.
-    if ((rc == GLOBUS_SUCCESS) &&
-            (lfs_handle->fd != NULL) && (lfs_handle->fs != NULL) &&
-            (lfsCloseFile(lfs_handle->fs, lfs_handle->fd) == -1)) {
+    if (lfs_release_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs) != 0)
+    {
         GenericError(lfs_handle, "Failed to close file in LFS.", rc);
         lfs_handle->fd = NULL;
     }
@@ -123,10 +119,10 @@ lfs_send(
     globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
 
     struct stat fileInfo;
-    int retval = lfs_stat(lfs_handle->pathname, &fileInfo);
+    int retval = lfs_stat_real(lfs_handle->pathname, &fileInfo, lfs_handle->fs);
     int hasStat = 1;
     if (retval == -ENOENT) {
-        SystemError(lfs_handle, "opening file for read", rc);
+        SystemError(lfs_handle, "opening file for read, doesn't exist", rc);
         errno = ENOENT;
         hasStat = 0;
         goto cleanup;
@@ -137,7 +133,16 @@ lfs_send(
     }
     
     //lfs_handle->fd = lfsOpenFile(lfs_handle->fs, lfs_handle->pathname, O_RDONLY, 0, 1, 0);
-    retval = lfs_open(lfs_handle->pathname, lfs_handle->fd);
+    lfs_handle->fd = (struct fuse_file_info*)globus_malloc(sizeof(struct fuse_file_info));
+    if (lfs_handle->fd == NULL)
+    {
+        MemoryError(lfs_handle, "Memory allocation error.", rc);
+        return rc;
+    }
+    memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
+    lfs_handle->fd->direct_io = 0;
+    lfs_handle->fd->flags = O_RDONLY;
+    retval = lfs_open_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs);
     if (retval != 0) {
         if (0) { //errno == EINTERNAL) {
             SystemError(lfs_handle,
@@ -152,9 +157,9 @@ lfs_send(
         goto cleanup;
     }
 
-    if (lfsSeek(lfs_handle->fs, lfs_handle->fd, lfs_handle->offset) == -1) {
-        GenericError(lfs_handle, "seek() fail", rc);
-    }
+    //if (lfsSeek(lfs_handle->fs, lfs_handle->fd, lfs_handle->offset) == -1) {
+    //    GenericError(lfs_handle, "seek() fail", rc);
+    //}
 
     lfs_dispatch_read(lfs_handle);
 
@@ -279,7 +284,7 @@ lfs_perform_read_cb(
     lfs_read_t *read_op = (lfs_read_t*) user_arg;
     lfs_handle_t *lfs_handle = read_op->lfs_handle;
     globus_size_t idx = read_op->idx;
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Starting read for buffer %u.\n", idx);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Starting read for buffer %u.\n", idx);
     globus_result_t rc = GLOBUS_SUCCESS;
     globus_size_t read_length, remaining_read;
     globus_off_t offset, cur_offset;
@@ -304,31 +309,35 @@ lfs_perform_read_cb(
     if (lfs_handle->syslog_host != NULL) {
         syslog(LOG_INFO, lfs_handle->syslog_msg, "READ", read_length, lfs_handle->io_count);
     }
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
-    //    "lfs_perform_read_cb for %u@%lu.\n", read_length, offset);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
+        "lfs_perform_read_cb for %u@%lu.\n", read_length, offset);
 
     remaining_read = read_length;
     cur_offset = offset;
     while (remaining_read != 0) {
-       nbytes = lfsPread(lfs_handle->fs, lfs_handle->fd, cur_offset, cur_buffer_pos, remaining_read);
-       if (nbytes == 0) {    /* eof */
+       //nbytes = lfsPread(lfs_handle->fs, lfs_handle->fd, cur_offset, cur_buffer_pos, remaining_read);
+        nbytes = lfs_read(lfs_handle->pathname, cur_buffer_pos, remaining_read, cur_offset, lfs_handle->fd);
+        if (nbytes == 0) {    /* eof */
            // No error
            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "lfs_perform_read_cb EOF.\n");
            globus_mutex_lock(lfs_handle->mutex);
            set_done(lfs_handle, GLOBUS_SUCCESS);
            globus_mutex_unlock(lfs_handle->mutex);
            break;
-       } else if (nbytes == -1) {
+        } else if (nbytes == -1) {
            SystemError(lfs_handle, "reading from LFS", rc)
            goto cleanup;
-       }
-       //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read size %d of %d requested\n", nbytes, remaining_read);
+        } else if (nbytes <= -2) {
+           SystemError(lfs_handle, "reading from LFS(2):", rc)
+           goto cleanup;
+        }
+        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read size %d of %d requested\n", nbytes, remaining_read);
        remaining_read -= nbytes;
        cur_buffer_pos += nbytes;
        cur_offset += nbytes;
     }
 
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read length: %d; remaining: %d\n", read_length, remaining_read);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read length: %d; remaining: %d\n", read_length, remaining_read);
     if (read_length != remaining_read) {
         // If we read anything at all, write it out to the client.
         // When the write to the network is finished, lfs_finish_read_cb will be called.
@@ -344,19 +353,19 @@ lfs_perform_read_cb(
             goto cleanup;
         }
     } else {
-        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Zero-length read; call finish_read_cb directly.\n");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Zero-length read; call finish_read_cb directly.\n");
         lfs_finish_read_cb(lfs_handle->op, rc, NULL, 0, (void*)lfs_handle);
     }
 
 cleanup:
 
     free(read_op);
-
+    
     if (short_circuit || (rc != GLOBUS_SUCCESS)) {
         globus_mutex_lock(lfs_handle->mutex);
         set_done(lfs_handle, rc);
         globus_mutex_unlock(lfs_handle->mutex);
-        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Short-circuit read.\n");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Short-circuit read.\n");
         // Call finish_read_op directly.
         lfs_finish_read_cb(lfs_handle->op, rc, buffer_pos,
             read_length, (void*)lfs_handle);

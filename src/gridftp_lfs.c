@@ -36,7 +36,7 @@ static void lfs_command(globus_gfs_operation_t, globus_gfs_command_info_t *, voi
 static void lfs_start(globus_gfs_operation_t, globus_gfs_session_info_t *);
 
 void
-lfs_destroy(
+lfs_destroy_gridftp(
     void *                              user_arg);
 
 void
@@ -44,19 +44,14 @@ lfs_start(
     globus_gfs_operation_t              op,
     globus_gfs_session_info_t *         session_info);
 
-void
-lfs_destroy(
-    void *                              user_arg);
-
-
 /*
  *  Interface definitions for LFS
  */
-static globus_gfs_storage_iface_t       globus_l_gfs_lfs_dsi_iface = 
+static globus_gfs_storage_iface_t       globus_l_gfs_lfs_dsi_iface =
 {
     GLOBUS_GFS_DSI_DESCRIPTOR_BLOCKING | GLOBUS_GFS_DSI_DESCRIPTOR_SENDER,
     lfs_start,
-    lfs_destroy,
+    lfs_destroy_gridftp,
     NULL, /* list */
     lfs_send,
     lfs_recv,
@@ -64,7 +59,7 @@ static globus_gfs_storage_iface_t       globus_l_gfs_lfs_dsi_iface =
     NULL, /* active */
     NULL, /* passive */
     NULL, /* data destroy */
-    lfs_command, 
+    lfs_command,
     lfs_stat_gridftp,
     NULL,
     NULL
@@ -140,9 +135,7 @@ gridftp_check_core()
 
 /*
  *  Called when the LFS module is activated.
- *  Complely boilerplate for HDFS, but
- *  the lowlevel FUSE interface doesn't support shipping
- *  a context, so we have to do a global init bit..
+ *  Need to initialize APR ourselves
  */
 int
 lfs_activate(void)
@@ -153,8 +146,11 @@ lfs_activate(void)
         GlobusExtensionMyModule(globus_gridftp_server_lfs),
         &globus_l_gfs_lfs_dsi_iface);
     //lio_init(0, NULL);
-    lio_gc = lio_fuse_init(lio_gc, "/store");
-    return 0;
+    char * argv = "lio_fuse";
+    char ** pargv = &argv;
+    char *** ppargv = &pargv;
+    int argc = 1;
+    return(lio_init(&argc, ppargv));
 }
 
 /*
@@ -166,8 +162,8 @@ lfs_deactivate(void)
 {
     globus_extension_registry_remove(
         GLOBUS_GFS_DSI_REGISTRY, "lfs");
-    lio_fuse_destroy(lio_gc);
     lio_shutdown();
+    //lfs_destroy((void*) lio_gc);
     return 0;
 }
 
@@ -228,7 +224,7 @@ lfs_command(
     char * return_value = GLOBUS_NULL;
 
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
-    
+
     // Get hadoop path name (ie subtract mount point)
     PathName=cmd_info->pathname;
     while (PathName[0] == '/' && PathName[1] == '/')
@@ -337,7 +333,7 @@ lfs_command(
 /*************************************************************************
  *  start
  *  -----
- *  This function is called when a new session is initialized, ie a user 
+ *  This function is called when a new session is initialized, ie a user
  *  connectes to the server.  This hook gives the dsi an oppertunity to
  *  set internal state that will be threaded through to all other
  *  function calls associated with this session. int                                 port;
@@ -348,9 +344,9 @@ lfs_command(
  *  finished_info.info.session.session_arg should be set to an DSI
  *  defined data structure.  This pointer will be passed as the void *
  *  user_arg parameter to all other interface functions.
- * 
- *  NOTE: at nice wrapper function should exist that hides the details 
- *        of the finished_info structure, but it currently does not.  
+ *
+ *  NOTE: at nice wrapper function should exist that hides the details
+ *        of the finished_info structure, but it currently does not.
  *        The DSI developer should jsut follow this template for now
  ************************************************************************/
 void
@@ -362,8 +358,6 @@ lfs_start(
     globus_gfs_finished_info_t          finished_info;
     GlobusGFSName(lfs_start);
     globus_result_t rc;
-
-    int max_buffer_count = 200;
     int max_file_buffer_count = 1500;
     int load_limit = 20;
     int replicas;
@@ -379,6 +373,14 @@ lfs_start(
     finished_info.info.session.username = session_info->username;
     finished_info.info.session.home_dir = "/";
 
+    printf("Loading lfs_start\n");
+    char * argv[] = {
+        "-d"
+    };
+    //finished_info.info.session.session_arg->fs = lio_gc;
+    //printf("got gc %d %d\n", (uint64_t)lio_gc, (uint64_t)finished_info.info.session.session_arg->fs);
+
+    int max_buffer_count = 200;
     if (!lfs_handle) {
         MemoryError(lfs_handle, "Unable to allocate a new LFS handle.", rc);
         finished_info.result = rc;
@@ -442,7 +444,7 @@ lfs_start(
     if (syslog_host_char == NULL) {
         lfs_handle->syslog_host = NULL;
     } else {
-        lfs_handle->syslog_host = syslog_host_char; 
+        lfs_handle->syslog_host = syslog_host_char;
         lfs_handle->remote_host = session_info->host_id;
         openlog("GRIDFTP", 0, LOG_LOCAL2);
         lfs_handle->syslog_msg = (char *)globus_malloc(256);
@@ -480,6 +482,14 @@ lfs_start(
     if (mount_point_char != NULL) {
         lfs_handle->mount_point = mount_point_char;
     }
+    lio_fuse_t *lfs = (struct lio_fuse_t *)lfs_init_real( NULL, 1, argv, lfs_handle->mount_point);
+    if (!lfs) {
+        MemoryError(lfs_handle, "Unable to allocate a new LFS FileSystem.", rc);
+        finished_info.result = rc;
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
+    lfs_handle->fs = (struct lio_fuse_t *) lfs;
     lfs_handle->mount_point_len = strlen(lfs_handle->mount_point);
 
     if (replicas_char != NULL) {
@@ -534,17 +544,15 @@ lfs_start(
     }
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-        "Start gridftp server; hadoop nameserver %s, port %i, replicas %i.\n",
-        lfs_handle->host, lfs_handle->port, lfs_handle->replicas);
-    /*
-    lfs_handle->fs = lfsConnect("default", 0);
+        "Connected to LFS.\n");
+
     if (!lfs_handle->fs) {
         finished_info.result = GLOBUS_FAILURE;
         globus_gridftp_server_operation_finished(
             op, GLOBUS_FAILURE, &finished_info);
         return;
     }
-    
+    /*
     // Parse the checksum request information
     const char * checksums_char = getenv("GRIDFTP_LFS_CHECKSUMS");
     if (checksums_char) {
@@ -564,23 +572,26 @@ lfs_start(
         op, GLOBUS_SUCCESS, &finished_info);
 }
 
-/************************************************************************ 
+/************************************************************************
  *  destroy
  *  -------
  *  This is called when a session ends, ie client quits or disconnects.
  ************************************************************************/
 void
-lfs_destroy(
+lfs_destroy_gridftp(
     void *                              user_arg)
 {
     lfs_handle_t *       lfs_handle;
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
-
+    printf("Destroying gridftp\n");
     if (lfs_handle) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroying the LFS connection.\n");
+        printf("The handle is %p\n", (void*)lfs_handle);
         if (lfs_handle->fs) {
-            lfsDisconnect(lfs_handle->fs);
-            lfs_handle->fs = NULL;
+            // FIXME LEAK LEAK LEAK
+            // lfsDisconnect(lfs_handle->fs);
+            // lfs_destroy((void *) lfs_handle->fs);
+            // lfs_handle->fs = NULL;
         }
         if (lfs_handle->username)
             globus_free(lfs_handle->username);

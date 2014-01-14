@@ -54,7 +54,7 @@ static globus_result_t lfs_initialize_file(globus_l_gfs_lfs_handle_t * lfs_handl
 
     char *tmpdir=getenv("TMPDIR");
     if (tmpdir == NULL) {
-                tmpdir = "/tmp";
+        tmpdir = "/tmp";
     }
     lfs_handle->tmp_file_pattern = globus_malloc(sizeof(char) * (strlen(tmpdir) + 32));
     sprintf(lfs_handle->tmp_file_pattern, "%s/gridftp-lfs-buffer-XXXXXX", tmpdir);
@@ -291,6 +291,7 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
 
 /**
  * Scan through all the buffers we own, then write out all the consecutive ones to LFS.
+ * batch it to 10meg writes
  */
 globus_result_t
 lfs_dump_buffers(lfs_handle_t *lfs_handle) {
@@ -337,7 +338,8 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
     if (lfs_handle->syslog_host != NULL) {
         syslog(LOG_INFO, lfs_handle->syslog_msg, "WRITE", nbytes, lfs_handle->offset);
     }
-    globus_size_t bytes_written = lfsWrite(lfs_handle->fs, lfs_handle->fd, buffer, nbytes);
+    //globus_size_t bytes_written = lfs_write(lfs_handle->fs, lfs_handle->fd, buffer, nbytes);
+    globus_size_t bytes_written = lfs_write(lfs_handle->pathname, buffer, nbytes,  lfs_handle->offset, lfs_handle->fd);
     if (bytes_written != nbytes) {
         SystemError(lfs_handle, "write into LFS", rc);
         set_done(lfs_handle, rc);

@@ -50,9 +50,8 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     // Only close the file for successful transfers and if the handle is valid.
     // This might cause long-term leaks, but Java has been crash-y when closing
     // invalid handles.
-    if ((rc == GLOBUS_SUCCESS) &&
-            (lfs_handle->fd != NULL) && (lfs_handle->fs != NULL) && 
-            (lfsCloseFile(lfs_handle->fs, lfs_handle->fd) == -1)) {
+    if (lfs_release_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs) != 0)
+    {
         GenericError(lfs_handle, "Failed to close file in LFS.", rc);
         lfs_handle->fd = NULL;
     }
@@ -72,7 +71,7 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         lfs_handle->io_count, lfs_handle->io_block_size);
 
     unsigned char final_cksm_human[2*MD5_DIGEST_LENGTH+1];
-    
+
     if (lfs_handle->cksm_types) {
         lfs_finalize_checksums(lfs_handle);
         human_readable_md5(final_cksm_human, lfs_handle->md5_output);
@@ -124,7 +123,7 @@ int determine_replicas (const char * path) {
         while(*map_line_index && *map_line_index == ' ') map_line_index++;
 
         // Try and match the map line and filename
-        while(*map_line_index && *filename_index && 
+        while(*map_line_index && *filename_index &&
                 (*map_line_index == *filename_index)) {
             map_line_index++;
             filename_index++;
@@ -135,9 +134,9 @@ int determine_replicas (const char * path) {
         * a match with the lfs filename.  Snarf up the # replicas
         * from the remainder of the line.
         */
-        while (*map_line_index && 
-                (*map_line_index == ' ' || 
-                 *map_line_index == '=' || 
+        while (*map_line_index &&
+                (*map_line_index == ' ' ||
+                 *map_line_index == '=' ||
                  *map_line_index == '\t')) {
             map_line_index++;
         }
@@ -176,7 +175,7 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
     strcpy(lfs_handle->pathname, path);
 
     lfs_handle->expected_cksm = NULL;
-  
+
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "We are going to open file %s.\n", lfs_handle->pathname);
     lfs_handle->outstanding = 0;
     lfs_handle->done = GLOBUS_FALSE;
@@ -185,11 +184,12 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
 
 
     // LFS cannot start transfers in the middle of a file.
-    globus_gridftp_server_get_write_range(lfs_handle->op,
-                                          &lfs_handle->offset,
-                                          &lfs_handle->op_length);
+    // old HDFS code, probably obsolete
+    //globus_gridftp_server_get_write_range(lfs_handle->op,
+    //                                      &lfs_handle->offset,
+    //                                      &lfs_handle->op_length);
 
-    if (lfs_handle->offset) {GenericError(lfs_handle, "Non-zero offsets are not supported.", rc); return rc;}
+    //if (lfs_handle->offset) {GenericError(lfs_handle, "Non-zero offsets are not supported.", rc); return rc;}
 
     globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
                                                   &lfs_handle->optimal_count);
@@ -201,7 +201,7 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
     for (i=0; i<lfs_handle->buffer_count; i++)
         lfs_handle->used[i] = 0;
     lfs_handle->buffer = globus_malloc(lfs_handle->buffer_count*lfs_handle->block_size*sizeof(globus_byte_t));
-    if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL || 
+    if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL ||
             lfs_handle->offsets==NULL || lfs_handle->used==NULL) {
         MemoryError(lfs_handle, "Memory allocation error.", rc);
         return rc;
@@ -224,7 +224,7 @@ lfs_recv(
     void *                              user_arg)
 {
     globus_l_gfs_lfs_handle_t *        lfs_handle;
-    globus_result_t                     rc = GLOBUS_SUCCESS; 
+    globus_result_t                     rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_recv);
 
@@ -233,7 +233,21 @@ lfs_recv(
     globus_mutex_lock(lfs_handle->mutex);
 
     lfs_handle->op = op;
-    lfs_handle->pathname = transfer_info->pathname;
+    char * PathName=transfer_info->pathname;
+    while (PathName[0] == '/' && PathName[1] == '/')
+    {
+        PathName++;
+    }
+    if (strncmp(PathName, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
+        PathName += lfs_handle->mount_point_len;
+    }
+    while (PathName[0] == '/' && PathName[1] == '/')
+    {
+        PathName++;
+    }
+    lfs_handle->pathname = PathName;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Munging path. Input: %s Mount: %s Munged: %s\n", transfer_info->pathname, lfs_handle->mount_point, lfs_handle->pathname);
+
 
     if ((rc = prepare_handle(lfs_handle)) != GLOBUS_SUCCESS) goto cleanup;
 
@@ -256,22 +270,39 @@ lfs_recv(
 	globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Open file %s with %d replicas.\n",
             lfs_handle->pathname, num_replicas);
     }
-    
+
     struct stat fileInfo;
-    if (lfs_stat(lfs_handle->pathname, (&fileInfo)) !=0) {
-        GenericError(lfs_handle, "Can't stat pathname.", rc);
-        goto cleanup;
+    int retval = lfs_stat_real(lfs_handle->pathname, (&fileInfo), lfs_handle->fs);
+    if (retval == -ENOENT) {
+        // the file doesn't exist, make an empty one
+        dev_t rdev;
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "File %s doesn't exist, creating it\n", lfs_handle->pathname);
+        // TODO can this fail?
+        int mknod_retval = lfs_mknod_real(lfs_handle->pathname, 0644, rdev, lfs_handle->fs);
+        if (mknod_retval != 0 && mknod_retval != -EEXIST) {
+            GenericError(lfs_handle, "Can't make new, blank file.", mknod_retval);
+            goto cleanup;
+        }
     } else if (S_ISDIR(fileInfo.st_mode)) {
-        GenericError(lfs_handle, "Destination path is a directory; cannot overwrite.", rc);
+        GenericError(lfs_handle, "Destination path is a directory; cannot overwrite.", retval);
         goto cleanup;
     }
 
     //lfs_handle->fd = lfsOpenFile(lfs_handle->fs, lfs_handle->pathname, O_WRONLY, 0, num_replicas, 0);
-    int retval = lfs_open(lfs_handle->pathname, lfs_handle->fd);
+    lfs_handle->fd = (struct fuse_file_info*)globus_malloc(sizeof(struct fuse_file_info));
+    if (lfs_handle->fd == NULL)
+    {
+        MemoryError(lfs_handle, "Memory allocation error.", rc);
+        return rc;
+    }
+    memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
+    lfs_handle->fd->direct_io = 0;
+    lfs_handle->fd->flags = O_WRONLY;
+    retval = lfs_open_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs);
     if (retval != 0)
     {
         if (0) { //errno == EINTERNAL) {
-            SystemError(lfs_handle, 
+            SystemError(lfs_handle,
                 "opening file due to an internal LFS error; "
                 "could be a misconfiguration or bad installation at the site.",
                 rc);
@@ -282,7 +313,7 @@ lfs_recv(
         }
         goto cleanup;
     }
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, 
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
         "Successfully opened file %s for user %s.\n", lfs_handle->pathname,
          lfs_handle->username);
 
@@ -312,7 +343,7 @@ int block_count = 0;
  * Callback for handling storage operations.
  *************************************************************************/
 static
-void 
+void
 lfs_handle_write_op(
     globus_gfs_operation_t              op,
     globus_result_t                     result,
@@ -322,9 +353,9 @@ lfs_handle_write_op(
     globus_bool_t                       eof,
     void *                              user_arg)
 {
-    globus_result_t                     rc = GLOBUS_SUCCESS; 
+    globus_result_t                     rc = GLOBUS_SUCCESS;
     globus_l_gfs_lfs_handle_t *        lfs_handle;
-                                                                                                                                           
+
     GlobusGFSName(lfs_handle_write_op);
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
 
@@ -377,7 +408,7 @@ lfs_handle_write_op(
     // Try to write out as many buffers as we can to LFS.
     if ((rc = lfs_dump_buffers(lfs_handle)) != GLOBUS_SUCCESS) {
         goto cleanup;
-    }   
+    }
 
 cleanup:
 
@@ -418,7 +449,7 @@ cleanup:
     } else if (rc != GLOBUS_SUCCESS) {
         // Don't close the file because the other transfers will want to finish up.
         // However, do set the failure status.
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, 
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
             "We failed to finish the transfer, but there are %i outstanding writes left over.\n",
             lfs_handle->outstanding);
         if (!lfs_handle->sent_finish) {
@@ -453,7 +484,7 @@ lfs_dispatch_write(
 */
     globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
                                                   &lfs_handle->optimal_count);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, 
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
         "lfs_dispatch_write; outstanding %d, optimal %d.\n",
         lfs_handle->outstanding, lfs_handle->optimal_count);
 

@@ -90,7 +90,7 @@ lfs_stat_gridftp(
  
 
     struct stat fileInfo;
-    int retval = lfs_stat(PathName, &fileInfo);
+    int retval = lfs_stat_real(PathName, &fileInfo, lfs_handle->fs);
     if (retval == -ENOENT) {
         result = GlobusGFSErrorSystemError("Stat: file oesn't exist", ENOENT);
         goto error_stat1;
@@ -119,7 +119,7 @@ lfs_stat_gridftp(
         
         globus_l_gfs_file_copy_stat(
             stat_array, &fileInfo, filename, NULL);
-        lfsFreeFileInfo(fileInfo, 1);
+        //lfsFreeFileInfo(fileInfo, 1);
         stat_count = 1;
     }
     else
