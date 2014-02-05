@@ -10,3 +10,8 @@ aclocal.m4
 config.log
 config.status
 autom4te.cache/*
+CMakeFiles/*
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+*.so
