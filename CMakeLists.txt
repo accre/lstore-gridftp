@@ -69,6 +69,7 @@ set(GRIDFTP_OBJS
 
 ADD_LIBRARY( globus_gridftp_server_lfs SHARED ${GRIDFTP_OBJS})
 TARGET_LINK_LIBRARIES( globus_gridftp_server_lfs ${LIBS} )
+set_target_properties(globus_gridftp_server_lfs PROPERTIES SOVERSION "1.0.0")
 install(TARGETS globus_gridftp_server_lfs
             DESTINATION lib)
 #SET_TARGET_PROPERTIES(lio PROPERTIES CLEAN_DIRECT_OUTPUT 1)

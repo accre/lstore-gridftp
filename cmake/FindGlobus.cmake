@@ -11,20 +11,23 @@
 find_path(globus_inc globus/globus_gridftp_server.h)
 
 if (globus_inc)
-   find_path(Globus_INCLUDE_DIR globus_gridftp_server.h ${globus_inc} ${globus_inc}/globus)
+   find_path(globus_inc_dir globus_gridftp_server.h ${globus_inc} ${globus_inc}/globus)
 endif (globus_inc)
 
+find_path(globus_inc_config globus_config.h)
+message(STATUS "got config ${globus_inc_dir} ${globus_inc_config}")
 #find_library(Globus_LIBRARY NAMES globus)
 
 #if (Globus_LIBRARY AND Globus_INCLUDE_DIR)
-if (Globus_INCLUDE_DIR)
+if (globus_inc_dir AND globus_inc_config)
     SET(Globus_FOUND "YES")
-endif (Globus_INCLUDE_DIR)
+    SET(Globus_INCLUDE_DIR ${globus_inc_dir} ${globus_inc_config})
+endif (globus_inc_dir AND globus_inc_config)
 #endif (Globus_LIBRARY AND Globus_INCLUDE_DIR)
 
 
 if (Globus_FOUND)
-   message(STATUS "Found Globus: ${Globus_INCLUDE_DIR} ${globus_inc}")
+   message(STATUS "Found Globus: ${Globus_INCLUDE_DIR}")
 else (Globus_FOUND)
    message(STATUS "Could not find Globus library")
 endif (Globus_FOUND)
