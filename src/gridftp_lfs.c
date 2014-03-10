@@ -8,6 +8,7 @@
 #include <sys/prctl.h>
 #include <syslog.h>
 #include <sys/syscall.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <execinfo.h>
 
@@ -24,6 +25,7 @@ globus_version_t gridftp_lfs_local_version =
     0 /* branch ID */
 };
 
+statsd_link * lfs_statsd_link = NULL;
 char err_msg[MSG_SIZE];
 int local_io_block_size = 0;
 int local_io_count = 0;
@@ -84,6 +86,7 @@ GlobusExtensionDefineModule(globus_gridftp_server_lfs) =
 void
 segv_handler (int sig)
 {
+  STATSD_COUNT("segv_received",1);
   printf ("SEGV triggered in native code.\n");
   const int max_trace = 32;
   void *trace[max_trace];
@@ -145,12 +148,50 @@ lfs_activate(void)
         "lfs",
         GlobusExtensionMyModule(globus_gridftp_server_lfs),
         &globus_l_gfs_lfs_dsi_iface);
-    //lio_init(0, NULL);
-    char * argv = "lio_fuse";
-    char ** pargv = &argv;
-    char *** ppargv = &pargv;
-    int argc = 1;
-    return(lio_init(&argc, ppargv));
+
+    // start up statsd
+    char * local_host = globus_malloc(256);
+    if (local_host) {
+        memset(local_host, 0, 256);
+        if (gethostname(local_host, 255)) {
+            strcpy(local_host, "UNKNOWN");
+        }
+    }
+
+    char statsd_namespace_prefix [] = "lfs.gridftp.";
+    char * statsd_namespace = globus_malloc(strlen(statsd_namespace_prefix)+
+                                            strlen(local_host));
+    strcpy(statsd_namespace, statsd_namespace_prefix);
+    char * target = local_host;
+    char * replace;
+    for (replace = statsd_namespace + strlen(statsd_namespace_prefix);
+            *replace != '\0'; 
+            ++replace, ++target) {
+        if (*replace == '.') {
+            target = '_';
+        } else {
+            target = *replace;
+        }   
+    }
+
+    // See if we're configured to write to statsd
+    char * lfs_statsd_link_port = getenv("GRIFTP_LFS_STATSD_PORT");
+    char * lfs_statsd_link_host = getenv("GRIFTP_LFS_STATSD_HOST");
+    if (lfs_statsd_link_host) {
+        int lfs_statsd_link_port_conv = 8125;
+        if (lfs_statsd_link_port) {
+            lfs_statsd_link_port_conv = atoi(lfs_statsd_link_port);
+        }
+        lfs_statsd_link = statsd_init_with_namespace(lfs_statsd_link_host,
+                                                     lfs_statsd_link_port_conv,
+                                                     statsd_namespace);
+    } else {
+        lfs_statsd_link = NULL;
+    }
+    STATSD_COUNT("activate",1);
+    printf("LFS <--> Gridftp plugin activated\n");
+    //return(lio_init(&argc, ppargv));
+    return 0;
 }
 
 /*
@@ -162,8 +203,10 @@ lfs_deactivate(void)
 {
     globus_extension_registry_remove(
         GLOBUS_GFS_DSI_REGISTRY, "lfs");
-    lio_shutdown();
-    //lfs_destroy((void*) lio_gc);
+    STATSD_COUNT("deactivate",1);
+    if (lfs_statsd_link) {
+        statsd_finalize(lfs_statsd_link);
+    }
     return 0;
 }
 
@@ -184,6 +227,7 @@ lfs_trev(
     switch (event_info->type) {
         case GLOBUS_GFS_EVENT_TRANSFER_ABORT:
             globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Got an abort request to the LFS client.\n");
+            STATSD_COUNT("trev_abort",1);
             set_done(lfs_handle, GLOBUS_FAILURE);
             break;
         default:
@@ -224,7 +268,7 @@ lfs_command(
     char * return_value = GLOBUS_NULL;
 
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
-
+    int retval;
     // Get hadoop path name (ie subtract mount point)
     PathName=cmd_info->pathname;
     while (PathName[0] == '/' && PathName[1] == '/')
@@ -243,10 +287,16 @@ lfs_command(
     switch (cmd_info->command) {
     case GLOBUS_GFS_CMD_MKD:
 {
+        STATSD_COUNT("mkdir",1);
         errno = 0;
         // if (lfsCreateDirectory(lfs_handle->fs, PathName) == -1) {
         // probably need to config a default umask
-        if (lfs_mkdir(PathName, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
+        if (is_lfs_path(lfs_handle, PathName)) {
+            retval = lfs_mkdir(PathName, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+        } else {
+            retval = mkdir(PathName, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+        }
+        if (retval < 0) {
             if (errno) {
                 result = GlobusGFSErrorSystemError("mkdir", errno);
             } else {
@@ -261,9 +311,14 @@ lfs_command(
         break;
     case GLOBUS_GFS_CMD_DELE:
 {
+        STATSD_COUNT("delete",1);
         errno = 0;
-        // if (lfs_unlink(lfs_handle->fs, PathName) == -1) {
-        if (lfs_unlink(PathName) < 0) {
+        if (is_lfs_path(lfs_handle, PathName)) {
+            retval = lfs_unlink(lfs_handle, PathName);
+        } else {
+            retval = unlink(PathName);
+        }
+        if (lfs_unlink(retval) < 0) {
             if (errno) {
                 result = GlobusGFSErrorSystemError("unlink", errno);
             } else {
@@ -280,13 +335,11 @@ lfs_command(
         break;
     case GLOBUS_GFS_CMD_CKSM:
 {
-        GenericError(lfs_handle, "Checksumming is currently unimplemented", result);
-        break;
-        if ((cmd_info->cksm_offset != 0) || (cmd_info->cksm_length != -1)) {
-            GenericError(lfs_handle, "Unable to retrieve partial checksums", result);
+        STATSD_COUNT("get_checksum",1);
+        char * value = NULL;
+        if (!is_lfs_path(lfs_handle, PathName)) {
             break;
         }
-        char * value = NULL;
         if ((result = lfs_get_checksum(lfs_handle, cmd_info->pathname, cmd_info->cksm_alg, &value)) != GLOBUS_SUCCESS) {
             break;
         }
@@ -320,6 +373,8 @@ lfs_command(
     case GLOBUS_GFS_CMD_SITE_SYMLINK:
         break;
     case GLOBUS_GFS_CMD_DCSC:
+        break;
+    default:
         break;
     }
 
@@ -362,7 +417,7 @@ lfs_start(
     int load_limit = 20;
     int replicas;
     int port;
-
+    STATSD_COUNT("start",1);
     lfs_handle = (lfs_handle_t *)globus_malloc(sizeof(lfs_handle_t));
     memset(lfs_handle, 0, sizeof(lfs_handle_t));
 
@@ -374,12 +429,6 @@ lfs_start(
     finished_info.info.session.home_dir = "/";
 
     printf("Loading lfs_start\n");
-    char * argv[] = {
-        "-d"
-    };
-    //finished_info.info.session.session_arg->fs = lio_gc;
-    //printf("got gc %d %d\n", (uint64_t)lio_gc, (uint64_t)finished_info.info.session.session_arg->fs);
-
     int max_buffer_count = 200;
     if (!lfs_handle) {
         MemoryError(lfs_handle, "Unable to allocate a new LFS handle.", rc);
@@ -482,6 +531,22 @@ lfs_start(
     if (mount_point_char != NULL) {
         lfs_handle->mount_point = mount_point_char;
     }
+    
+    // fire up the mount point
+    char * argv[] = {
+        "-o",
+        "big_writes,use_ino,kernel_cache"
+        "-c",
+        lfs_handle->lfs_config,
+        "-d"
+    };
+    struct stat dummy;
+    if (stat(lfs_handle->lfs_config,& dummy)) {
+        SystemError(lfs_handle, "Config file doesn't exist", lfs_handle->lfs_config);
+        finished_info.result = errno;
+        globus_gridftp_server_operation_finished(op, errno, &finished_info);
+        return;
+    }
     lio_fuse_t *lfs = (struct lio_fuse_t *)lfs_init_real( NULL, 1, argv, lfs_handle->mount_point);
     if (!lfs) {
         MemoryError(lfs_handle, "Unable to allocate a new LFS FileSystem.", rc);
@@ -583,15 +648,14 @@ lfs_destroy_gridftp(
 {
     lfs_handle_t *       lfs_handle;
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
+    STATSD_COUNT("destroy",1);
     printf("Destroying gridftp\n");
     if (lfs_handle) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroying the LFS connection.\n");
         printf("The handle is %p\n", (void*)lfs_handle);
         if (lfs_handle->fs) {
-            // FIXME LEAK LEAK LEAK
-            // lfsDisconnect(lfs_handle->fs);
-            // lfs_destroy((void *) lfs_handle->fs);
-            // lfs_handle->fs = NULL;
+            lfs_destroy((void *) lfs_handle->fs);
+            lfs_handle->fs = NULL;
         }
         if (lfs_handle->username)
             globus_free(lfs_handle->username);
@@ -674,3 +738,8 @@ set_close_done(
     }
 }
 
+#define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
+inline bool is_lfs_path(const globus_l_gfs_lfs_handle_t * lfs_handle, const char * path) { 
+    ADVANCE_SLASHES(path);
+    return strncmp(path, lfs_handle->mount_point, lfs_handle->mount_point_len) == 0;
+};

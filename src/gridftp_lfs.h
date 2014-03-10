@@ -13,9 +13,9 @@
 #include <stdint.h>
 #include <openssl/md5.h>
 
-#include "globus_gridftp_server.h"
+#include <globus/globus_gridftp_server.h>
 #include "gridftp_lfs_error.h"
-
+#include "statsd-client.h"
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -26,6 +26,13 @@
 
 // Data types and globals
 #define default_id 00;
+
+// Global statsd socket
+extern statsd_link * lfs_statsd_link;
+#define STATSD_COUNT(name, count) if (lfs_statsd_link) { statsd_count(lfs_statsd_link, name, count, 1.0); }
+#define STATSD_TIMER_START(variable) time_t variable; time(& variable );
+#define STATSD_TIMER_END(name, variable) time_t variable ## _end; if (lfs_statsd_link) { time(& variable ## _end); statsd_timing(lfs_statsd_link, name, (int) (difftime(variable ## _end, variable) * 1000.0)); }
+
 
 // Note: This really should be const, but the globus module activation code
 // doesn't have this as const.
@@ -39,10 +46,12 @@ extern globus_version_t gridftp_lfs_local_version;
 typedef struct globus_l_gfs_lfs_handle_s
 {
     char *                              pathname;
+    char *                              pathname_munged;
     // used to be the HDFS filesystem handle
     struct lio_fuse_t *                 fs;
     // used to be the HDFS filehandle
     struct fuse_file_info *             fd;
+    int                                 fd_posix;
     globus_size_t                       block_size;
     globus_off_t                        op_length; // Length of the requested read/write size
     globus_off_t                        offset;
@@ -89,11 +98,17 @@ typedef struct globus_l_gfs_lfs_handle_s
     char                                adler32_human[2*sizeof(uint32_t)+1];
     uint32_t                            crc32;
     uint32_t                            cksum;
+
+    // Statsd support
+    statsd_link *                       statsd_link;
 } globus_l_gfs_lfs_handle_t;
 typedef globus_l_gfs_lfs_handle_t lfs_handle_t;
 
 #define MSG_SIZE 1024
 extern char err_msg[MSG_SIZE];
+
+// figure out if a path if LFS based
+bool is_lfs_path(const globus_l_gfs_lfs_handle_t * lfs_handle, const char * path);
 
 // Function for sending a file to the client.
 void

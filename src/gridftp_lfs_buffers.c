@@ -298,7 +298,6 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
 
     globus_off_t * offsets = lfs_handle->offsets;
     globus_size_t * nbytes = lfs_handle->nbytes;
-    globus_size_t bytes_written = 0;
     size_t i, wrote_something;
     size_t cnt = lfs_handle->buffer_count;
     GlobusGFSName(globus_l_gfs_lfs_dump_buffers);
@@ -339,11 +338,26 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
         syslog(LOG_INFO, lfs_handle->syslog_msg, "WRITE", nbytes, lfs_handle->offset);
     }
     //globus_size_t bytes_written = lfs_write(lfs_handle->fs, lfs_handle->fd, buffer, nbytes);
-    globus_size_t bytes_written = lfs_write(lfs_handle->pathname, buffer, nbytes,  lfs_handle->offset, lfs_handle->fd);
-    if (bytes_written != nbytes) {
-        SystemError(lfs_handle, "write into LFS", rc);
-        set_done(lfs_handle, rc);
-        return rc;
+    globus_size_t bytes_written;
+    STATSD_TIMER_START(read_timer);
+    if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+        bytes_written = lfs_write(lfs_handle->pathname_munged, buffer, nbytes,  lfs_handle->offset, lfs_handle->fd);
+        if (bytes_written != nbytes) {
+            SystemError(lfs_handle, "write into LFS", rc);
+            set_done(lfs_handle, rc);
+            return rc;
+        }
+        STATSD_TIMER_END("posix_read_time", read_timer);
+        STATSD_COUNT("lfs_bytes_written",bytes_written);
+    } else {
+        bytes_written = write(lfs_handle->fd, buffer, nbytes);
+        if (bytes_written != nbytes) {
+            SystemError(lfs_handle, "write into POSIX", rc);
+            set_done(lfs_handle, rc);
+            return rc;
+        }
+        STATSD_COUNT("posix_bytes_written", bytes_written);
+        STATSD_TIMER_END("posix_read_time", read_timer);
     }
     // Checksum after writing to disk.  This way, if a non-transient corruption occurs
     // during writing to Hadoop, we detect it and hopefully fail the file.

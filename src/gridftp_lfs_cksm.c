@@ -352,7 +352,6 @@ globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname
 
 void
 lfs_parse_checksum_types(lfs_handle_t * lfs_handle, const char * types) {
-/*
     lfs_handle->cksm_types = 0;
     if (strstr(types, "MD5") != NULL) {
         lfs_handle->cksm_types |= LFS_CKSM_TYPE_MD5;
@@ -366,5 +365,4 @@ lfs_parse_checksum_types(lfs_handle_t * lfs_handle, const char * types) {
     if (strstr(types, "ADLER32")) {
         lfs_handle->cksm_types |= LFS_CKSM_TYPE_ADLER32;
     }
-*/
 }

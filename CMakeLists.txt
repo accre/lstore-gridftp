@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 # make a project
-project( gridftp-lfs C CXX)
+project(gridftp-lfs C CXX)
 
 # Set some cmake defaults
 set(CMAKE_BUILD_TYPE "Debug")
@@ -22,8 +22,8 @@ set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 
 # get dependancies
 find_package(OpenSSL REQUIRED)
-find_package(APR REQUIRED)
-find_package(APRUtil REQUIRED)
+find_package(APR-ACCRE REQUIRED)
+find_package(APRUtil-ACCRE REQUIRED)
 find_package(Phoebus)
 find_package(Jerasure REQUIRED)
 find_package(ToolBox REQUIRED)
@@ -43,20 +43,7 @@ set(CMAKE_C_FLAGS_RELEASE "-O ${CMAKE_REQUIRED_FLAGS} -DHAVE_CONFIG_H -DLINUX=2 
 include_directories(${OPENSSL_INCLUDE_DIR} ${APR_INCLUDE_DIR} ${APRUTIL_INCLUDE_DIR} ${PHOEBUS_INCLUDE_DIR} ${ZLIB_INCLUDE_DIR}
     ${HWLOC_INCLUDE_DIR} ${JERASURE_INCLUDE_DIR} ${TOOLBOX_INCLUDE_DIR} ${GOP_INCLUDE_DIR} ${IBP_INCLUDE_DIR} ${FUSE_INCLUDE_DIR} ${CZMQ_INCLUDE_DIR}
     ${XATTR_INCLUDE_DIR} ${LIO_INCLUDE_DIR} ${Globus_INCLUDE_DIR})
-#SET(LIBS ${LIBS} ${IBP_LIBRARY} ${GOP_LIBRARY} ${CZMQ_LIBRARY} ${TOOLBOX_LIBRARY} ${JERASURE_LIBRARY} ${OPENSSL_LIBRARIES} ${CRYPTO_LIBRARIES} 
-#    ${APR_LIBRARY} ${APRUTIL_LIBRARY} ${HWLOC_LIBRARY} ${ZMQ_LIBRARY} ${FUSE_LIBRARY} ${ZLIB_LIBRARY} ${XATTR_LIBRARY} ${LIO_LIBARY} pthread m dl rt)
 SET(LIBS ${LIBS} ${LIO_LIBRARY} pthread m dl rt)
-#SET(LIBS ${LIBS} ${IBP_LIBRARY} ${GOP_LIBRARY} ${CZMQ_LIBRARY} ${TOOLBOX_LIBRARY} ${JERASURE_LIBRARY} ${OPENSSL_LIBRARIES} ${CRYPTO_LIBRARIES} 
-#    ${APR_LIBRARY} ${APRUTIL_LIBRARY} ${HWLOC_LIBRARY} ${ZMQ_LIBRARY} ${FUSE_LIBRARY} ${ZLIB_LIBRARY} ${XATTR_LIBRARY} ${LIO_LIBARY} pthread m dl rt)
-
-
-#Make the version file
-#set(LIO_CLIENT_VERSION "lio_client: v1.0.0")
-#site_name(BUILD_HOST)
-#Date(BUILD_DATE)
-#CompilerVersion(COMPILER_VERSION)
-#CompilerFlags(COMPILER_FLAGS)
-#configure_file("${PROJECT_SOURCE_DIR}/lio_client_version.c.in" "${PROJECT_BINARY_DIR}/lio_client_version.c")
 
 set(GRIDFTP_OBJS
     src/gridftp_lfs.c
@@ -65,6 +52,7 @@ set(GRIDFTP_OBJS
     src/gridftp_lfs_stat.c
     src/gridftp_lfs_buffers.c
     src/gridftp_lfs_cksm.c
+    src/statsd-client.c
 )
 
 ADD_LIBRARY( globus_gridftp_server_lfs SHARED ${GRIDFTP_OBJS})
@@ -72,9 +60,6 @@ TARGET_LINK_LIBRARIES( globus_gridftp_server_lfs ${LIBS} )
 set_target_properties(globus_gridftp_server_lfs PROPERTIES SOVERSION "1.0.0")
 install(TARGETS globus_gridftp_server_lfs
             DESTINATION lib)
-#SET_TARGET_PROPERTIES(lio PROPERTIES CLEAN_DIRECT_OUTPUT 1)
-
-
 install(TARGETS globus_gridftp_server_lfs DESTINATION lib)
 
 # packaging definitions
@@ -87,6 +72,7 @@ SET(CPACK_PACKAGE_VERSION_MAJOR "1")
 SET(CPACK_PACKAGE_VERSION_MINOR "0")
 SET(CPACK_PACKAGE_VERSION_PATCH "0")
 SET(CPACK_PACKAGE_INSTALL_DIRECTORY "CMake ${CMake_VERSION_MAJOR}.${CMake_VERSION_MINOR}")
+SET(CPACK_RPM_PACKAGE_REQUIRES "openssl >= 1.0.1f, zlib >= 1.2.8, apr >= 1.5.0, apr-util >= 1.5.3, accre-toolbox >= 1.1.0, accre-gop >= 1.1.0, ibp-client >= 1.0.0, czmq >= 1.4.1, lio >= 1.0.0 ")
 #SET(CPACK_STRIP_FILES "bin/MyExecutable")
 #SET(CPACK_SOURCE_STRIP_FILES "")
 #SET(CPACK_PACKAGE_EXECUTABLES "MyExecutable" "My Executable")

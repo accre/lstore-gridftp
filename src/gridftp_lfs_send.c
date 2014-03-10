@@ -43,10 +43,17 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         return lfs_handle->done_status;
     }
 
-    if (lfs_release_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs) != 0)
-    {
-        GenericError(lfs_handle, "Failed to close file in LFS.", rc);
-        lfs_handle->fd = NULL;
+    if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+        if (lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs) != 0)
+        {
+            GenericError(lfs_handle, "Failed to close file in LFS.", rc);
+            lfs_handle->fd = NULL;
+        }
+    } else {
+        if (lfs_release_real(lfs_handle->fd_posix) != 0)
+        {
+            GenericError(lfs_handle, "Failed to close file in LFS.", rc);
+        }
     }
 
     if (lfs_handle->buffer)
@@ -90,13 +97,14 @@ lfs_send(
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
     globus_mutex_lock(lfs_handle->mutex);
     lfs_handle->pathname = transfer_info->pathname;
-
-    ADVANCE_SLASHES(lfs_handle->pathname)
-    if (strncmp(lfs_handle->pathname, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
-        lfs_handle->pathname += lfs_handle->mount_point_len;
+    lfs_handle->pathname_munged = transfer_info->pathname;
+    if (is_lfs_path(lfs_handle, lfs_handle->pathname_munged)) {
+        ADVANCE_SLASHES(lfs_handle->pathname_munged)
+        if (strncmp(lfs_handle->pathname_munged, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
+            lfs_handle->pathname_munged += lfs_handle->mount_point_len;
+        }
+        ADVANCE_SLASHES(lfs_handle->pathname_munged)
     }
-    ADVANCE_SLASHES(lfs_handle->pathname)
-
     lfs_handle->op = op;
     lfs_handle->outstanding = 0;
     lfs_handle->done = 0;
@@ -117,44 +125,47 @@ lfs_send(
         lfs_handle->op_length);
 
     globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
-
-    struct stat fileInfo;
-    int retval = lfs_stat_real(lfs_handle->pathname, &fileInfo, lfs_handle->fs);
-    int hasStat = 1;
-    if (retval == -ENOENT) {
-        SystemError(lfs_handle, "opening file for read, doesn't exist", rc);
-        errno = ENOENT;
-        hasStat = 0;
-        goto cleanup;
-    }
-    if (S_ISDIR(fileInfo.st_mode)) {
-        GenericError(lfs_handle, "The file you are trying to read is a directory", rc);
-        goto cleanup;
-    }
-    
-    //lfs_handle->fd = lfsOpenFile(lfs_handle->fs, lfs_handle->pathname, O_RDONLY, 0, 1, 0);
-    lfs_handle->fd = (struct fuse_file_info*)globus_malloc(sizeof(struct fuse_file_info));
-    if (lfs_handle->fd == NULL)
-    {
-        MemoryError(lfs_handle, "Memory allocation error.", rc);
-        return rc;
-    }
-    memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
-    lfs_handle->fd->direct_io = 0;
-    lfs_handle->fd->flags = O_RDONLY;
-    retval = lfs_open_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs);
-    if (retval != 0) {
-        if (0) { //errno == EINTERNAL) {
-            SystemError(lfs_handle,
-                "opening file due to an internal LFS error; "
-                "could be a misconfiguration or bad installation at the site.",
-                rc);
-        } else if (errno == EACCES) {
-            SystemError(lfs_handle, "opening file; permission error in LFS.", rc);
-        } else {
-            SystemError(lfs_handle, "opening file; failed to open file due to unknown error in LFS.", rc);
+    if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+        struct stat fileInfo;
+        int retval = lfs_stat_real(lfs_handle->pathname, &fileInfo, lfs_handle->fs);
+        int hasStat = 1;
+        if (retval == -ENOENT) {
+            SystemError(lfs_handle, "opening file for read, doesn't exist", rc);
+            errno = ENOENT;
+            hasStat = 0;
+            goto cleanup;
         }
-        goto cleanup;
+        if (S_ISDIR(fileInfo.st_mode)) {
+            GenericError(lfs_handle, "The file you are trying to read is a directory", rc);
+            goto cleanup;
+        }
+        
+        //lfs_handle->fd = lfsOpenFile(lfs_handle->fs, lfs_handle->pathname, O_RDONLY, 0, 1, 0);
+        lfs_handle->fd = (struct fuse_file_info*)globus_malloc(sizeof(struct fuse_file_info));
+        if (lfs_handle->fd == NULL)
+        {
+            MemoryError(lfs_handle, "Memory allocation error.", rc);
+            goto cleanup;
+        }
+        memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
+        lfs_handle->fd->direct_io = 0;
+        lfs_handle->fd->flags = O_RDONLY;
+        retval = lfs_open_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs);
+        if (retval != 0) {
+            if (0) { //errno == EINTERNAL) {
+                SystemError(lfs_handle,
+                    "opening file due to an internal LFS error; "
+                    "could be a misconfiguration or bad installation at the site.",
+                    rc);
+            } else if (errno == EACCES) {
+                SystemError(lfs_handle, "opening file; permission error in LFS.", rc);
+            } else {
+                SystemError(lfs_handle, "opening file; failed to open file due to unknown error in LFS.", rc);
+            }
+            goto cleanup;
+        }
+    } else {
+        lfs_handle->fd_posix = open(lfs_handle->pathname, O_RDONLY);
     }
 
     //if (lfsSeek(lfs_handle->fs, lfs_handle->fd, lfs_handle->offset) == -1) {
@@ -315,26 +326,45 @@ lfs_perform_read_cb(
     remaining_read = read_length;
     cur_offset = offset;
     while (remaining_read != 0) {
-       //nbytes = lfsPread(lfs_handle->fs, lfs_handle->fd, cur_offset, cur_buffer_pos, remaining_read);
-        nbytes = lfs_read(lfs_handle->pathname, cur_buffer_pos, remaining_read, cur_offset, lfs_handle->fd);
-        if (nbytes == 0) {    /* eof */
-           // No error
-           globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "lfs_perform_read_cb EOF.\n");
-           globus_mutex_lock(lfs_handle->mutex);
-           set_done(lfs_handle, GLOBUS_SUCCESS);
-           globus_mutex_unlock(lfs_handle->mutex);
-           break;
-        } else if (nbytes == -1) {
-           SystemError(lfs_handle, "reading from LFS", rc)
-           goto cleanup;
-        } else if (nbytes <= -2) {
-           SystemError(lfs_handle, "reading from LFS(2):", rc)
-           goto cleanup;
+        if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+            STATSD_TIMER_START(read_loop_timer);
+            nbytes = lfs_read(lfs_handle->pathname, cur_buffer_pos, remaining_read, cur_offset, lfs_handle->fd);
+            if (nbytes == 0) {    /* eof */
+                // No error
+                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "lfs_perform_read_cb EOF.\n");
+                globus_mutex_lock(lfs_handle->mutex);
+                set_done(lfs_handle, GLOBUS_SUCCESS);
+                globus_mutex_unlock(lfs_handle->mutex);
+                break;
+            } else if (nbytes == -1) {
+                SystemError(lfs_handle, "reading from LFS", rc)
+                goto cleanup;
+            } else if (nbytes <= -2) {
+                SystemError(lfs_handle, "reading from LFS(2):", rc)
+                goto cleanup;
+            }
+            STATSD_TIMER_END("lfs_read_time", read_loop_timer);
+            STATSD_COUNT("lfs_read_bytes_read",nbytes);
+        } else {
+            STATSD_TIMER_START(read_loop_timer);
+            nbytes = read(lfs_handle->fd_posix, cur_buffer_pos, remaining_read);
+            if (nbytes == 0) {    /* eof */
+                // No error
+                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "lfs_perform_read_cb EOF.\n");
+                globus_mutex_lock(lfs_handle->mutex);
+                set_done(lfs_handle, GLOBUS_SUCCESS);
+                globus_mutex_unlock(lfs_handle->mutex);
+                break;
+            } else if (nbytes < 0) {
+                SystemError(lfs_handle, "reading from posix", rc)
+                goto cleanup;
+            }
+            STATSD_TIMER_END("posix_read_time", read_loop_timer);
+            STATSD_COUNT("posix_read_bytes_read",nbytes);
         }
-        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read size %d of %d requested\n", nbytes, remaining_read);
-       remaining_read -= nbytes;
-       cur_buffer_pos += nbytes;
-       cur_offset += nbytes;
+        remaining_read -= nbytes;
+        cur_buffer_pos += nbytes;
+        cur_offset += nbytes;
     }
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read length: %d; remaining: %d\n", read_length, remaining_read);
