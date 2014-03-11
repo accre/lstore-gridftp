@@ -190,7 +190,7 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
     // If there are more than 10 unused buffers, deallocate.
     if (cnt - i > 10) {
         snprintf(err_msg, MSG_SIZE, "About to deallocate %i buffers; %i will be left.\n", cnt-i, i);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, err_msg);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
         lfs_handle->buffer_count = i;
         lfs_handle->nbytes = globus_realloc(lfs_handle->nbytes, lfs_handle->buffer_count*sizeof(globus_size_t));
         lfs_handle->offsets = globus_realloc(lfs_handle->offsets, lfs_handle->buffer_count*sizeof(globus_off_t));

@@ -222,7 +222,7 @@ globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
         const char okay_flag [] = "okay";
         retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.success", okay_flag, strlen(okay_flag), 0, lfs_handle->fs);
         if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Saved checksums to %s.\n", filename);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Saved checksums to %s.\n", lfs_handle->pathname);
     }
 
     return retval;
