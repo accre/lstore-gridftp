@@ -15,7 +15,7 @@ static inline int
 use_file_buffer(globus_l_gfs_lfs_handle_t * lfs_handle) {
 
     unsigned int buffer_count = lfs_handle->buffer_count;
- 
+
     if (buffer_count >= lfs_handle->max_buffer_count-1) {
         return 1;
     }
@@ -83,8 +83,8 @@ static globus_result_t lfs_initialize_file(globus_l_gfs_lfs_handle_t * lfs_handl
             globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to initialize backing file.\n");
             rc = GlobusGFSErrorGeneric("Failed to initialize backing file.");
             globus_free(tmp_write);
-            return rc; 
-        }   
+            return rc;
+        }
     }
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Pre-filled file buffer with empty data.\n");
     globus_free(tmp_write);
@@ -260,7 +260,7 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
                     rc = GlobusGFSErrorGeneric("Unable to extend our file-backed buffers; aborting transfer.");
                     globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Unable to extend our file-backed buffers; aborting transfer.\n");
                 }
-                // If our buffer was too small, 
+                // If our buffer was too small,
                 if (nbytes < lfs_handle->block_size) {
                     int addl_size = lfs_handle->block_size-nbytes;
                     char * tmp_write = globus_calloc(addl_size, sizeof(globus_byte_t));
@@ -272,7 +272,7 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
                 }
                 //lfs_handle->buffer = mmap(lfs_handle->buffer, lfs_handle->block_size*lfs_handle->max_file_buffer_count*sizeof(globus_byte_t), PROT_READ | PROT_WRITE, MAP_PRIVATE, lfs_handle->tmpfilefd, 0);
             }
-            if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL || lfs_handle->offsets==NULL || lfs_handle->used==NULL) {  
+            if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL || lfs_handle->offsets==NULL || lfs_handle->used==NULL) {
                 rc = GlobusGFSErrorGeneric("Memory allocation error.");
                 globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Memory allocation error.\n");
                 globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
@@ -341,23 +341,25 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
     globus_size_t bytes_written;
     STATSD_TIMER_START(read_timer);
     if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping buffer at %lu to LFS.\n", lfs_handle->offset);
         bytes_written = lfs_write(lfs_handle->pathname_munged, buffer, nbytes,  lfs_handle->offset, lfs_handle->fd);
         if (bytes_written != nbytes) {
             SystemError(lfs_handle, "write into LFS", rc);
             set_done(lfs_handle, rc);
             return rc;
         }
-        STATSD_TIMER_END("posix_read_time", read_timer);
+        STATSD_TIMER_END("write_time", read_timer);
         STATSD_COUNT("lfs_bytes_written",bytes_written);
     } else {
-        bytes_written = write(lfs_handle->fd, buffer, nbytes);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping buffer at %lu to filesystem.\n", lfs_handle->offset);
+        bytes_written = write(lfs_handle->fd_posix, buffer, nbytes);
         if (bytes_written != nbytes) {
             SystemError(lfs_handle, "write into POSIX", rc);
             set_done(lfs_handle, rc);
             return rc;
         }
         STATSD_COUNT("posix_bytes_written", bytes_written);
-        STATSD_TIMER_END("posix_read_time", read_timer);
+        STATSD_TIMER_END("posix_write_time", read_timer);
     }
     // Checksum after writing to disk.  This way, if a non-transient corruption occurs
     // during writing to Hadoop, we detect it and hopefully fail the file.
@@ -372,10 +374,10 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
  *  Buffer management functions for the read workflow
  */
 inline globus_result_t
-allocate_buffers( 
-    lfs_handle_t * lfs_handle, 
+allocate_buffers(
+    lfs_handle_t * lfs_handle,
     globus_size_t          num_buffers)
-{   
+{
     GlobusGFSName(allocate_buffers);
     globus_result_t rc = GLOBUS_SUCCESS;
     globus_ssize_t new_size = num_buffers-lfs_handle->buffer_count;
@@ -399,12 +401,12 @@ allocate_buffers(
         }
     }
     return rc;
-}   
+}
 
 inline globus_ssize_t
 find_buffer(
     lfs_handle_t * lfs_handle,
-    globus_byte_t * buffer)                       
+    globus_byte_t * buffer)
 {
     globus_ssize_t result = -1;
     globus_size_t idx;
@@ -412,10 +414,10 @@ find_buffer(
         if (lfs_handle->buffer+idx*lfs_handle->block_size == buffer) {
             result = idx;
             break;
-        } 
-    }   
+        }
+    }
     return result;
-}       
+}
 
 inline globus_ssize_t
 find_empty_buffer(

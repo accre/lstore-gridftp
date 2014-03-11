@@ -84,7 +84,7 @@ static void human_readable_adler32(unsigned char *adler32_human, uint32_t adler3
     unsigned int i;
     unsigned char * adler32_char = (unsigned char*)&adler32;
     unsigned char * adler32_ptr = adler32_human;
-    for (i = 0; i < sizeof(uint32_t); i++) { 
+    for (i = 0; i < sizeof(uint32_t); i++) {
         sprintf(adler32_ptr, "%02x", adler32_char[sizeof(uint32_t)-1-i]);
         adler32_ptr++;
         adler32_ptr++;
@@ -179,7 +179,6 @@ void lfs_finalize_checksums(lfs_handle_t *lfs_handle) {
  *  Save checksums.
  */
 globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
-/*
     globus_result_t rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_save_checksum);
@@ -188,12 +187,7 @@ globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
         return rc;
     }
 
-    lfsFS fs = lfsConnectAsUser("default", 0, "root");
-    if (fs == NULL) {
-        SystemError(lfs_handle, "Failure in connecting to LFS for checksum upload", rc);
-        return rc;
-    }
-
+    int retval = 0;
     size_t cksm_len = strlen(lfs_handle->cksm_root);
     size_t path_len = strlen(lfs_handle->pathname);
     size_t filelen = cksm_len + path_len + 2;
@@ -201,153 +195,63 @@ globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
     if (!filename) {
         MemoryError(lfs_handle, "Unable to allocate new filename", rc);
     }
-    memcpy(filename, lfs_handle->cksm_root, cksm_len);
-    filename[cksm_len] = '/';
-    memcpy(filename+cksm_len+1, lfs_handle->pathname, path_len);
-    filename[filelen-1] = '\0';
-
-    lfsFile fh = lfsOpenFile(fs, filename, O_WRONLY, 0, 0, 0);
-    if (fh == NULL) {
-        SystemError(lfs_handle, "Failed to open checksum file", rc);
-        return rc;
-    }
 
     char buffer[OUTPUT_BUFFER_SIZE];
     unsigned short length = 0;
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CKSUM) {
-        length += snprintf(buffer, OUTPUT_BUFFER_SIZE, "CKSUM:%u\n", lfs_handle->cksum);
+        snprintf(buffer, OUTPUT_BUFFER_SIZE, "%u", lfs_handle->cksum);
+        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.cksum", buffer, strlen(buffer), 0,lfs_handle->fs);
+        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CRC32) {
-        length += snprintf(buffer+length, OUTPUT_BUFFER_SIZE, "CRC32:%u\n", lfs_handle->crc32);
+        snprintf(buffer, OUTPUT_BUFFER_SIZE, "%u", lfs_handle->cksum);
+        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.crc32", buffer, strlen(buffer), 0,lfs_handle->fs);
+        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
-        length += snprintf(buffer+length, OUTPUT_BUFFER_SIZE, "ADLER32:%s\n", lfs_handle->adler32_human);
+        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.adler32", lfs_handle->adler32_human, strlen(lfs_handle->adler32_human), 0, lfs_handle->fs);
+        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_MD5) {
         lfs_handle->md5_output_human[MD5_DIGEST_LENGTH*2] = '\0';
-        length += snprintf(buffer+length, OUTPUT_BUFFER_SIZE, "MD5:%s\n", lfs_handle->md5_output_human);
-    }
-
-    // Returns # of bytes, -1 on err
-    if (lfsWrite(fs, fh, buffer, length) < 0) {
-        SystemError(lfs_handle, "Failed to write checksum file", rc);
-    }
-
-    // return -1 on err
-    if (lfsCloseFile(fs, fh) < 0) {
-        SystemError(lfs_handle, "Failed to close checksum file", rc);
+        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.md5", lfs_handle->md5_output_human, strlen(lfs_handle->md5_output_human), 0, lfs_handle->fs);
+        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
 
     if (rc == GLOBUS_SUCCESS) {
+        const char okay_flag [] = "okay";
+        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.success", okay_flag, strlen(okay_flag), 0, lfs_handle->fs);
+        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Saved checksums to %s.\n", filename);
     }
 
-    // Note we purposely leak the filesystem handle, as Hadoop has disconnect issues.
-    return rc;
-*/
+    return retval;
 }
 
 /*
  *  Retrieve checksums.
  */
-globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname, const char * requested_cksm, char**cksm_value) {
-/*
+globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname, const char * requested_cksm, char**cksum_value) {
     globus_result_t rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_get_checksum);
 
-    lfsFS fs = lfsConnectAsUser("default", 0, "root");
-    if (fs == NULL) {
-        SystemError(lfs_handle, "Failure in connecting to LFS for checksum upload", rc);
-        return rc;
+    char * outbuf = (char *) globus_malloc(2048);
+    *cksum_value = outbuf;
+    int retval = lfs_getxattr_real(lfs_handle->pathname, requested_cksm, cksum_value,2047, lfs_handle->fs);
+    if (retval < 0) {
+        return -retval;
     }
 
-    // Not used in this function except in the contents of the error message.
-    lfs_handle->pathname = strdup(pathname);
-
-    size_t cksm_len = strlen(lfs_handle->cksm_root);
-    size_t path_len = strlen(pathname);
-    size_t filelen = cksm_len + path_len + 2;
-    char * filename = malloc(filelen);
-    if (!filename) {
-        MemoryError(lfs_handle, "Unable to allocate new filename", rc);
-    }
-    memcpy(filename, lfs_handle->cksm_root, cksm_len);
-    filename[cksm_len] = '/';
-    memcpy(filename+cksm_len+1, pathname, path_len);
-    filename[filelen-1] = '\0';
-
-    lfsFile fh = lfsOpenFile(fs, filename, O_RDONLY, 0, 0, 0);
-    if (fh == NULL) {
-        SystemError(lfs_handle, "Failed to open checksum file", rc);
-        return rc;
-    }
-
-    char buffer[OUTPUT_BUFFER_SIZE], cksm[OUTPUT_BUFFER_SIZE], *val;
-    buffer[OUTPUT_BUFFER_SIZE-1] = '\0';
-    if (lfsRead(fs, fh, buffer, OUTPUT_BUFFER_SIZE-1) <= 0) {
-        SystemError(lfs_handle, "Failed to read checksum file", rc);
-    }
-    unsigned length = 0;
-    const char * ptr = buffer;
-    *cksm_value = NULL;
-    // Raise your hand if you hate string parsing in C.
-    while (sscanf(ptr, "%s%n", cksm, &length) == 1) {
-        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum line: %s.\n", cksm);
-        if (strlen(cksm) < 2) {
-            GenericError(lfs_handle, "Too-short entry for checksum", rc);
-            break;
-        }
-        val = strchr(cksm, ':');
-        if (val == NULL) {
-            GenericError(lfs_handle, "Invalid format of checksum entry.", rc);
-            break;
-        }
-        *val = '\0';
-        val++;
-        if (*val == '\0') {
-            GenericError(lfs_handle, "Checksum value not specified", rc);
-            break;
-        }
-        if (strcmp(cksm, requested_cksm) == 0) {
-            *cksm_value = strdup(val);
-            break;
-        }
-        ptr += length;
-        if (*ptr == '\0') {
-            break;
-        }
-        if (*ptr != '\n') {
-            // Error;
-            GenericError(lfs_handle, "Invalid format of checksum entry (Not a newline)", rc);
-            break;
-        }
-        ptr += 1;
-        if (*ptr == '\0') {
-            GenericError(lfs_handle, "Unexpected null", rc);
-            break;
-        }
-    }
-
-    if (*cksm_value == NULL) {
+    if (*cksum_value == NULL) {
         GenericError(lfs_handle, "Failed to retrieve checksum", rc);
     }
 
-    // return -1 on err
-    if (lfsCloseFile(fs, fh) < 0) {
-        SystemError(lfs_handle, "Failed to close checksum file", rc);
-    }
-
     if (rc == GLOBUS_SUCCESS) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Got checksum (%s:%s) for %s.\n", requested_cksm, *cksm_value, filename);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Got checksum (%s:%s) for %s.\n", requested_cksm, *cksum_value, pathname);
     }
 
-    if (lfs_handle->pathname) {
-        free(lfs_handle->pathname);
-    }
-    // Note we purposely leak the filesystem handle (fs), as Hadoop has disconnect issues.
     return rc;
-*/
 }
 
 void

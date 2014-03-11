@@ -160,23 +160,23 @@ lfs_activate(void)
 
     char statsd_namespace_prefix [] = "lfs.gridftp.";
     char * statsd_namespace = globus_malloc(strlen(statsd_namespace_prefix)+
-                                            strlen(local_host));
+                                            strlen(local_host)+1);
     strcpy(statsd_namespace, statsd_namespace_prefix);
-    char * target = local_host;
-    char * replace;
-    for (replace = statsd_namespace + strlen(statsd_namespace_prefix);
-            *replace != '\0'; 
-            ++replace, ++target) {
-        if (*replace == '.') {
-            target = '_';
+    char * source = local_host;
+    char * dest;
+    for (dest = statsd_namespace + strlen(statsd_namespace_prefix);
+            *source != '\0';
+            ++source, ++dest) {
+        if (*source == '.') {
+            *dest = '_';
         } else {
-            target = *replace;
-        }   
+            *dest = *source;
+        }
     }
 
     // See if we're configured to write to statsd
-    char * lfs_statsd_link_port = getenv("GRIFTP_LFS_STATSD_PORT");
-    char * lfs_statsd_link_host = getenv("GRIFTP_LFS_STATSD_HOST");
+    char * lfs_statsd_link_port = getenv("GRIDFTP_LFS_STATSD_PORT");
+    char * lfs_statsd_link_host = getenv("GRIDFTP_LFS_STATSD_HOST");
     if (lfs_statsd_link_host) {
         int lfs_statsd_link_port_conv = 8125;
         if (lfs_statsd_link_port) {
@@ -185,12 +185,19 @@ lfs_activate(void)
         lfs_statsd_link = statsd_init_with_namespace(lfs_statsd_link_host,
                                                      lfs_statsd_link_port_conv,
                                                      statsd_namespace);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Sending log data to statsd %s:%i, namespace %s\n",
+                                lfs_statsd_link_host,
+                                lfs_statsd_link_port_conv,
+                                statsd_namespace);
     } else {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Not logging to statsd. Set $GRIDFTP_LFS_STATSD_HOST to enable\n");
         lfs_statsd_link = NULL;
     }
+    //printf("Beginning plugin\n");
+    globus_free(statsd_namespace);
     STATSD_COUNT("activate",1);
-    printf("LFS <--> Gridftp plugin activated\n");
-    //return(lio_init(&argc, ppargv));
+    //printf("LFS <--> Gridftp plugin activated\n");
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "LFS DSI activated.\n");
     return 0;
 }
 
@@ -204,8 +211,9 @@ lfs_deactivate(void)
     globus_extension_registry_remove(
         GLOBUS_GFS_DSI_REGISTRY, "lfs");
     STATSD_COUNT("deactivate",1);
-    if (lfs_statsd_link) {
+    if (lfs_statsd_link != NULL) {
         statsd_finalize(lfs_statsd_link);
+        lfs_statsd_link = NULL;
     }
     return 0;
 }
@@ -263,24 +271,27 @@ lfs_command(
     globus_result_t                    result;
     globus_l_gfs_lfs_handle_t *       lfs_handle;
     char *                             PathName;
+    char *                             PathName_munged;
     GlobusGFSName(lfs_command);
 
     char * return_value = GLOBUS_NULL;
 
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Entering lfs_command\n");
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
     int retval;
     // Get hadoop path name (ie subtract mount point)
     PathName=cmd_info->pathname;
-    while (PathName[0] == '/' && PathName[1] == '/')
+    PathName_munged = cmd_info->pathname;
+    while (PathName_munged[0] == '/' && PathName_munged[1] == '/')
     {
-        PathName++;
+        PathName_munged++;
     }
-    if (strncmp(PathName, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
-        PathName += lfs_handle->mount_point_len;
+    if (strncmp(PathName_munged, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
+        PathName_munged += lfs_handle->mount_point_len;
     }
-    while (PathName[0] == '/' && PathName[1] == '/')
+    while (PathName_munged[0] == '/' && PathName_munged[1] == '/')
     {
-        PathName++;
+        PathName_munged++;
     }
 
     GlobusGFSErrorSystemError("command", ENOSYS);
@@ -292,7 +303,9 @@ lfs_command(
         // if (lfsCreateDirectory(lfs_handle->fs, PathName) == -1) {
         // probably need to config a default umask
         if (is_lfs_path(lfs_handle, PathName)) {
-            retval = lfs_mkdir(PathName, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Making LFS directory: %s\n", PathName_munged);
+            retval = lfs_mkdir(PathName_munged, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
+            errno = -retval;
         } else {
             retval = mkdir(PathName, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
         }
@@ -314,11 +327,11 @@ lfs_command(
         STATSD_COUNT("delete",1);
         errno = 0;
         if (is_lfs_path(lfs_handle, PathName)) {
-            retval = lfs_unlink(lfs_handle, PathName);
+            retval = lfs_unlink_real(PathName_munged, lfs_handle->fs);
         } else {
             retval = unlink(PathName);
         }
-        if (lfs_unlink(retval) < 0) {
+        if (retval != 0) {
             if (errno) {
                 result = GlobusGFSErrorSystemError("unlink", errno);
             } else {
@@ -417,6 +430,7 @@ lfs_start(
     int load_limit = 20;
     int replicas;
     int port;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Entering lfs_start.\n");
     STATSD_COUNT("start",1);
     lfs_handle = (lfs_handle_t *)globus_malloc(sizeof(lfs_handle_t));
     memset(lfs_handle, 0, sizeof(lfs_handle_t));
@@ -428,7 +442,7 @@ lfs_start(
     finished_info.info.session.username = session_info->username;
     finished_info.info.session.home_dir = "/";
 
-    printf("Loading lfs_start\n");
+    //printf("Loading lfs_start\n");
     int max_buffer_count = 200;
     if (!lfs_handle) {
         MemoryError(lfs_handle, "Unable to allocate a new LFS handle.", rc);
@@ -469,7 +483,7 @@ lfs_start(
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
     lfs_handle->host = "hadoop-name";
-    lfs_handle->mount_point = "/mnt/hadoop";
+    lfs_handle->mount_point = "/lio/lfs";
     lfs_handle->port = 9000;
     lfs_handle->lfs_config = "/etc/lio/lio-fuse.cfg";
     char * replicas_char = getenv("GRIDFTP_LFS_REPLICAS");
@@ -531,7 +545,7 @@ lfs_start(
     if (mount_point_char != NULL) {
         lfs_handle->mount_point = mount_point_char;
     }
-    
+
     // fire up the mount point
     char * argv[] = {
         "-o",
@@ -617,7 +631,6 @@ lfs_start(
             op, GLOBUS_FAILURE, &finished_info);
         return;
     }
-    /*
     // Parse the checksum request information
     const char * checksums_char = getenv("GRIDFTP_LFS_CHECKSUMS");
     if (checksums_char) {
@@ -625,9 +638,8 @@ lfs_start(
             "Checksum algorithms in use: %s.\n", checksums_char);
         lfs_parse_checksum_types(lfs_handle, checksums_char);
     } else {
-        lfs_handle->cksm_types = 0;
+        lfs_handle->cksm_types =  LFS_CKSM_TYPE_MD5 | LFS_CKSM_TYPE_ADLER32 | LFS_CKSM_TYPE_CRC32 | LFS_CKSM_TYPE_CKSUM;
     }
-    */
     lfs_handle->tmp_file_pattern = (char *)NULL;
 
     // Handle core limits
@@ -649,10 +661,10 @@ lfs_destroy_gridftp(
     lfs_handle_t *       lfs_handle;
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
     STATSD_COUNT("destroy",1);
-    printf("Destroying gridftp\n");
+    //printf("Destroying gridftp\n");
     if (lfs_handle) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroying the LFS connection.\n");
-        printf("The handle is %p\n", (void*)lfs_handle);
+        //printf("The handle is %p\n", (void*)lfs_handle);
         if (lfs_handle->fs) {
             lfs_destroy((void *) lfs_handle->fs);
             lfs_handle->fs = NULL;
@@ -739,7 +751,10 @@ set_close_done(
 }
 
 #define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
-inline bool is_lfs_path(const globus_l_gfs_lfs_handle_t * lfs_handle, const char * path) { 
+bool is_lfs_path(const globus_l_gfs_lfs_handle_t * lfs_handle, const char * path) {
     ADVANCE_SLASHES(path);
-    return strncmp(path, lfs_handle->mount_point, lfs_handle->mount_point_len) == 0;
-};
+    int retval = strncmp(path, lfs_handle->mount_point, lfs_handle->mount_point_len);
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checking LFS path with %s %s (%i)\n",  path, lfs_handle->mount_point, retval);
+    //printf("Checking LFS path with %s %s (%i)\n", path, lfs_handle->mount_point, retval);
+    return retval == 0;
+}

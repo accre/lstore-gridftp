@@ -43,16 +43,23 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     STATSD_COUNT("close_and_clean",1);
     GlobusGFSName(close_and_clean);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Trying to close file in LFS; zero outstanding blocks.\n");
+    int retval;
     if (is_close_done(lfs_handle)) {
         return lfs_handle->done_status;
     }
 
-    if (lfs_release_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs) != 0)
-    {
-        GenericError(lfs_handle, "Failed to close file in LFS.", rc);
-        lfs_handle->fd = NULL;
+    if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+        if ((retval = lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs)) != 0)
+        {
+            GenericError(lfs_handle, "Failed to close file in LFS.", retval);
+            lfs_handle->fd = NULL;
+        }
+    } else {
+        if ((retval = close(lfs_handle->fd_posix)) != 0) {
+            GenericError(lfs_handle, "Failed to close file in POSIX.", retval);
+            lfs_handle->fd_posix = 0;
+        }
     }
-
     if (lfs_handle->using_file_buffer == 0) {
         globus_free(lfs_handle->buffer);
     } else {
@@ -77,7 +84,7 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
                 GenericError(lfs_handle, "Calculated checksum %s does not match expected checksum %s.\n", rc);
             }
         }
-        if ((lfs_handle->done_status == GLOBUS_SUCCESS) && (rc == GLOBUS_SUCCESS)) {
+        if ((lfs_handle->done_status == GLOBUS_SUCCESS) && (rc == GLOBUS_SUCCESS) && is_lfs_path(lfs_handle,lfs_handle->pathname)) {
             rc = lfs_save_checksum(lfs_handle);
         }
     }
@@ -109,15 +116,17 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
 
     const char *path = lfs_handle->pathname;
 
-    ADVANCE_SLASHES(path);
-    if (strncmp(path, lfs_handle->mount_point, lfs_handle->mount_point_len) == 0) {
-        path += lfs_handle->mount_point_len;
+    if (is_lfs_path(lfs_handle, path)) {
+        ADVANCE_SLASHES(path);
+        if (strncmp(path, lfs_handle->mount_point, lfs_handle->mount_point_len) == 0) {
+            path += lfs_handle->mount_point_len;
+        }
+        ADVANCE_SLASHES(path);
     }
-    ADVANCE_SLASHES(path);
 
-    lfs_handle->pathname = (char*)globus_malloc(strlen(path)+1);
-    if (!lfs_handle->pathname) {MemoryError(lfs_handle, "Unable to make a copy of the path name.", rc); return rc;}
-    strcpy(lfs_handle->pathname, path);
+    lfs_handle->pathname_munged = (char*)globus_malloc(strlen(path)+1);
+    if (!lfs_handle->pathname_munged) {MemoryError(lfs_handle, "Unable to make a copy of the path name.", rc); return rc;}
+    strcpy(lfs_handle->pathname_munged, path);
 
     lfs_handle->expected_cksm = NULL;
 
@@ -161,7 +170,7 @@ lfs_recv(
 {
     globus_l_gfs_lfs_handle_t *        lfs_handle;
     globus_result_t                     rc = GLOBUS_SUCCESS;
-
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Receiving a file: %s\n", transfer_info->pathname);
     GlobusGFSName(lfs_recv);
 
 
@@ -172,19 +181,21 @@ lfs_recv(
     char * PathName=transfer_info->pathname;
     lfs_handle->pathname = PathName;
     if (is_lfs_path(lfs_handle, PathName)) {
-        while (PathName[0] == '/' && PathName[1] == '/')
-        {
-            PathName++;
-        }
-        if (strncmp(PathName, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
-            PathName += lfs_handle->mount_point_len;
-        }
-        while (PathName[0] == '/' && PathName[1] == '/')
-        {
-            PathName++;
-        }
         lfs_handle->pathname_munged = PathName;
+        while (lfs_handle->pathname_munged[0] == '/' && lfs_handle->pathname_munged[1] == '/')
+        {
+            lfs_handle->pathname_munged++;
+        }
+        if (strncmp(lfs_handle->pathname_munged, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
+            lfs_handle->pathname_munged += lfs_handle->mount_point_len;
+        }
+        while (lfs_handle->pathname_munged[0] == '/' && lfs_handle->pathname_munged[1] == '/')
+        {
+            lfs_handle->pathname_munged++;
+        }
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Munging path. Input: %s Mount: %s Munged: %s\n", transfer_info->pathname, lfs_handle->mount_point, lfs_handle->pathname_munged);
+    } else {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Path not in LFS, opening regularly: %s\n", transfer_info->pathname);
     }
 
     if ((rc = prepare_handle(lfs_handle)) != GLOBUS_SUCCESS) goto cleanup;
@@ -204,13 +215,13 @@ lfs_recv(
     int retval;
     if (is_lfs_path(lfs_handle, PathName)) {
         struct stat fileInfo;
-        retval = lfs_stat_real(lfs_handle->pathname, (&fileInfo), lfs_handle->fs);
+        retval = lfs_stat_real(lfs_handle->pathname_munged, (&fileInfo), lfs_handle->fs);
         if (retval == -ENOENT) {
             // the file doesn't exist, make an empty one
             dev_t rdev;
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "File %s doesn't exist, creating it\n", lfs_handle->pathname);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "File %s doesn't exist, creating it\n", lfs_handle->pathname_munged);
             // TODO can this fail?
-            int mknod_retval = lfs_mknod_real(lfs_handle->pathname, 0644, rdev, lfs_handle->fs);
+            int mknod_retval = lfs_mknod_real(lfs_handle->pathname_munged, 0644, rdev, lfs_handle->fs);
             if (mknod_retval != 0 && mknod_retval != -EEXIST) {
                 GenericError(lfs_handle, "Can't make new, blank file.", mknod_retval);
                 goto cleanup;
@@ -229,7 +240,7 @@ lfs_recv(
         memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
         lfs_handle->fd->direct_io = 0;
         lfs_handle->fd->flags = O_WRONLY;
-        retval = lfs_open_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs);
+        retval = lfs_open_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs);
         if (retval != 0)
         {
             if (0) { //errno == EINTERNAL) {
@@ -247,7 +258,7 @@ lfs_recv(
     } else {
         retval = open(PathName,  O_WRONLY | O_CREAT );
         if (retval > 0) {
-            lfs_handle->fd = retval;
+            lfs_handle->fd_posix = retval;
         } else {
             SystemError(lfs_handle, "opening file; POSIX error", rc);
             goto cleanup;

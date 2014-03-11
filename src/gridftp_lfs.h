@@ -148,12 +148,12 @@ inline globus_result_t
 allocate_buffers(
     lfs_handle_t *    lfs_handle,
     globus_size_t             num_buffers);
-    
+
 inline globus_ssize_t
 find_buffer(
     lfs_handle_t *    lfs_handle,
-    globus_byte_t *    buffer); 
-            
+    globus_byte_t *    buffer);
+
 inline globus_ssize_t
 find_empty_buffer(
     lfs_handle_t *    lfs_handle);
@@ -223,7 +223,7 @@ globus_result_t
 lfs_get_checksum(
     lfs_handle_t *    lfs_handle,
     const char *       pathname,
-    const char *       requested_cksm, 
+    const char *       requested_cksm,
     char **            cksm_value);
 
 #pragma GCC visibility pop

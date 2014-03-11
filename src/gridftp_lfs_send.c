@@ -50,7 +50,7 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
             lfs_handle->fd = NULL;
         }
     } else {
-        if (lfs_release_real(lfs_handle->fd_posix) != 0)
+        if (close(lfs_handle->fd_posix) != 0)
         {
             GenericError(lfs_handle, "Failed to close file in LFS.", rc);
         }
@@ -127,7 +127,7 @@ lfs_send(
     globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
     if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
         struct stat fileInfo;
-        int retval = lfs_stat_real(lfs_handle->pathname, &fileInfo, lfs_handle->fs);
+        int retval = lfs_stat_real(lfs_handle->pathname_munged, &fileInfo, lfs_handle->fs);
         int hasStat = 1;
         if (retval == -ENOENT) {
             SystemError(lfs_handle, "opening file for read, doesn't exist", rc);
@@ -139,7 +139,7 @@ lfs_send(
             GenericError(lfs_handle, "The file you are trying to read is a directory", rc);
             goto cleanup;
         }
-        
+
         //lfs_handle->fd = lfsOpenFile(lfs_handle->fs, lfs_handle->pathname, O_RDONLY, 0, 1, 0);
         lfs_handle->fd = (struct fuse_file_info*)globus_malloc(sizeof(struct fuse_file_info));
         if (lfs_handle->fd == NULL)
@@ -150,7 +150,8 @@ lfs_send(
         memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
         lfs_handle->fd->direct_io = 0;
         lfs_handle->fd->flags = O_RDONLY;
-        retval = lfs_open_real(lfs_handle->pathname, lfs_handle->fd, lfs_handle->fs);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from LFS: %s", lfs_handle->pathname_munged);
+        retval = lfs_open_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs);
         if (retval != 0) {
             if (0) { //errno == EINTERNAL) {
                 SystemError(lfs_handle,
@@ -165,6 +166,7 @@ lfs_send(
             goto cleanup;
         }
     } else {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from filesystem: %s", lfs_handle->pathname);
         lfs_handle->fd_posix = open(lfs_handle->pathname, O_RDONLY);
     }
 
@@ -208,12 +210,12 @@ lfs_finish_read_cb(
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
     globus_mutex_lock(lfs_handle->mutex);
 
-#ifdef FAKE_ERROR 
+#ifdef FAKE_ERROR
     block_count ++;
     if (block_count == 30) {
         GenericError(lfs_handle, "Got bored, threw an error.", rc);
         goto cleanup;
-    }   
+    }
 #endif
 
     // Various short-circuit routines
@@ -269,7 +271,7 @@ cleanup:
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Transfer has finished!\n");
         rc = close_and_clean(lfs_handle, rc);
         globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
-        
+
     } else if (rc != GLOBUS_SUCCESS) {
         // Don't close the file because the other transfers will want to finish up.
         // However, do set the failure status.
@@ -326,8 +328,8 @@ lfs_perform_read_cb(
     remaining_read = read_length;
     cur_offset = offset;
     while (remaining_read != 0) {
+        STATSD_TIMER_START(read_loop_timer);
         if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
-            STATSD_TIMER_START(read_loop_timer);
             nbytes = lfs_read(lfs_handle->pathname, cur_buffer_pos, remaining_read, cur_offset, lfs_handle->fd);
             if (nbytes == 0) {    /* eof */
                 // No error
@@ -343,10 +345,9 @@ lfs_perform_read_cb(
                 SystemError(lfs_handle, "reading from LFS(2):", rc)
                 goto cleanup;
             }
-            STATSD_TIMER_END("lfs_read_time", read_loop_timer);
-            STATSD_COUNT("lfs_read_bytes_read",nbytes);
+            STATSD_TIMER_END("read_time", read_loop_timer);
+            STATSD_COUNT("lfs_bytes_read",nbytes);
         } else {
-            STATSD_TIMER_START(read_loop_timer);
             nbytes = read(lfs_handle->fd_posix, cur_buffer_pos, remaining_read);
             if (nbytes == 0) {    /* eof */
                 // No error
@@ -360,7 +361,7 @@ lfs_perform_read_cb(
                 goto cleanup;
             }
             STATSD_TIMER_END("posix_read_time", read_loop_timer);
-            STATSD_COUNT("posix_read_bytes_read",nbytes);
+            STATSD_COUNT("posix_bytes_read",nbytes);
         }
         remaining_read -= nbytes;
         cur_buffer_pos += nbytes;
@@ -390,7 +391,7 @@ lfs_perform_read_cb(
 cleanup:
 
     free(read_op);
-    
+
     if (short_circuit || (rc != GLOBUS_SUCCESS)) {
         globus_mutex_lock(lfs_handle->mutex);
         set_done(lfs_handle, rc);
@@ -466,7 +467,7 @@ lfs_dispatch_read(
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Issued read from buffer %u (outstanding=%u).\n", idx, lfs_handle->outstanding);
 
         lfs_handle->offset += read_length;
-        if (lfs_handle->op_length != -1) { 
+        if (lfs_handle->op_length != -1) {
             lfs_handle->op_length -= read_length;
         }
     }
