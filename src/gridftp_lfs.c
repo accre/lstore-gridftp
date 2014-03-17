@@ -546,6 +546,10 @@ lfs_start(
         lfs_handle->mount_point = mount_point_char;
     }
 
+    if (lfs_config_char != NULL) {
+        lfs_handle->lfs_config = lfs_config_char;
+    }
+
     // fire up the mount point
     char * argv[] = {
         "-o",
@@ -583,10 +587,6 @@ lfs_start(
         if ((port >= 1) && (port <= 65535))
             lfs_handle->port = port;
     }
-    if (lfs_config_char != NULL) {
-        lfs_handle->lfs_config = lfs_config_char;
-    }
-
     lfs_handle->using_file_buffer = 0;
 
     lfs_handle->cksm_root = "/cksums";
