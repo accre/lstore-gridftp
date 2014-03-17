@@ -204,7 +204,7 @@ globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
         if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CRC32) {
-        snprintf(buffer, OUTPUT_BUFFER_SIZE, "%u", lfs_handle->cksum);
+        snprintf(buffer, OUTPUT_BUFFER_SIZE, "%u", lfs_handle->crc32);
         retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.crc32", buffer, strlen(buffer), 0,lfs_handle->fs);
         if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
