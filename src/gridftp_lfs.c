@@ -491,7 +491,7 @@ lfs_start(
     char * port_char = getenv("GRIDFTP_LFS_PORT");
     char * mount_point_char = getenv("GRIDFTP_LFS_MOUNT_POINT");
     char * load_limit_char = getenv("GRIDFTP_LOAD_LIMIT");
-    char * lfs_config_char = getenv("GRIFTP_LFS_CONFIG");
+    char * lfs_config_char = getenv("GRIDFTP_LFS_CONFIG");
 
     // Get our hostname
     lfs_handle->local_host = globus_malloc(256);
