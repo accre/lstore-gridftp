@@ -145,8 +145,11 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
     // Since we have the block size, we can compute the min buffer count
     lfs_handle->min_buffer_count = (lfs_handle->preferred_write_size * lfs_handle->write_size_buffers) / lfs_handle->block_size + 1;
 
-    globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
-                                                  &lfs_handle->optimal_count);
+    //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
+    //                                              &lfs_handle->optimal_count);
+    // the number of in-flight blocks (I think)
+    lfs_handle->optimal_count = (lfs_handle->preferred_write_size * 
+                                    (lfs_handle->write_size_buffers - 1) )/ lfs_handle->block_size;
     lfs_handle->buffer_count = lfs_handle->min_buffer_count;
     lfs_handle->nbytes = globus_malloc(lfs_handle->buffer_count*sizeof(globus_size_t));
     lfs_handle->offsets = globus_malloc(lfs_handle->buffer_count*sizeof(globus_off_t));
@@ -388,8 +391,8 @@ cleanup:
     if (buffer) {
         globus_free(buffer);
     }
-    lfs_handle->outstanding--;
 
+    lfs_handle->outstanding--;
     if (!is_done(lfs_handle)) {
         // Request more transfers.
         lfs_dispatch_write(lfs_handle);
@@ -436,8 +439,8 @@ lfs_dispatch_write(
         return;
     }
 */
-    globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
-                                                  &lfs_handle->optimal_count);
+    //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
+    //                                             &lfs_handle->optimal_count);
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
         "lfs_dispatch_write; outstanding %d, optimal %d.\n",
         lfs_handle->outstanding, lfs_handle->optimal_count);

@@ -173,6 +173,7 @@ lfs_activate(void)
             *dest = *source;
         }
     }
+    *dest = '\0';
 
     // See if we're configured to write to statsd
     char * lfs_statsd_link_port = getenv("GRIDFTP_LFS_STATSD_PORT");

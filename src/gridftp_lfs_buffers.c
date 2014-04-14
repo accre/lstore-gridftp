@@ -183,7 +183,7 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
         i = preferred_location;
     } else {
         int found_unpreferred = 0;
-        for (i = lfs_handle->min_buffer_size; i<cnt; i++) {
+        for (i = lfs_handle->min_buffer_count; i<cnt; i++) {
             if (lfs_handle->used[i] == 0) {
                 found_unpreferred = 1;
                 break;
@@ -198,12 +198,17 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
         }
     }
    
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Trying to find a slot. Preferred %u chosen %u\n",
-                            preferred_location, i);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Trying to find a slot. Preferred %u chosen %u out of %u\n",
+                            preferred_location, i, lfs_handle->buffer_count);
     // if i == cnt, we didn't find anywhere to stick this buffer..
     if (i != cnt) {
-        snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; offset %lu.\n", i, offset);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+        if (offset % lfs_handle->block_size == 0) {
+            snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; block offset %lu.\n", i, offset/lfs_handle->block_size);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+        } else {
+            snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; offset %lu.\n", i, offset);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+        }
         lfs_handle->nbytes[i] = nbytes;
         lfs_handle->offsets[i] = offset;
         lfs_handle->used[i] = 1;
@@ -356,7 +361,8 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
         int found_head = 0;
         for (i=0; i<cnt; i++) {
             // Do checks to see if we're at the front of a train
-            if (lfs_handle->used[i] == 1 && offsets[i] == lfs_handle->offset) {
+            if (!found_head && lfs_handle->used[i] && offsets[i] == lfs_handle->offset) {
+                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Found beginning of buffer. Block %i\n", i);
                 offset_begin = lfs_handle->offset;
                 buffer_begin = i;
                 found_head = 1;
@@ -365,8 +371,10 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
             if (!found_head) {
                 continue;
             }
-            if (!lfs_handle->used[i]) {
-                SystemError(lfs_handle, "Missing used invariant in lfs_dump_buffers", errno);
+            if (!lfs_handle->used[i] || (offset_begin + accumulated_amount != offsets[i])) {
+                found_head = 0;
+                accumulated_amount = 0;
+                continue;
             }   
             /**
              * So, we would like to dump buffers IF any of:
@@ -375,28 +383,27 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
              * 3) We have accumulated 10MB of data
              * 4) next buffer is used AND current_offset + block_size != next_offset
              */
-            int checkOne = (i == cnt-1);
+            int checkOne = (i == cnt - 1);
             int checkTwo = (nbytes[i] != lfs_handle->block_size);
-            int checkThree = (accumulated_amount + lfs_handle->block_size >= 
-                                                                target_amount);
+            int checkThree = (accumulated_amount + nbytes[i] >= target_amount);
             // this check makes no sense if we're at the end of the list
             int checkFour = ((i != cnt -1) && (lfs_handle->used[i+1]) &&
-                                (offsets[i] + lfs_handle->block_size != 
-                                                                offsets[i+1]));
+                                (offsets[i] + nbytes[i] != offsets[i+1]));
             if ( checkOne || checkTwo || checkThree || checkFour ) {
-                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "dumping %u to %u\n",
-                                        buffer_begin, i);
+                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "dumping %u to %u: %i %i %i %i\n",
+                                        buffer_begin, i, checkOne, checkTwo,
+                                        checkThree, checkFour);
                 // dump things out immediately
-                // Start from where buffer_begin was
                 globus_byte_t *tmp_buffer = lfs_handle->buffer+buffer_begin*lfs_handle->block_size;
-                // The number of bytes to write is....whole blocks
-                globus_size_t tmp_nbytes = (lfs_handle->block_size * (i - buffer_begin)) +
-                                            // plus the size of the last block
+                globus_size_t tmp_nbytes = accumulated_amount +
                                             nbytes[i]*sizeof(globus_byte_t);
-                lfs_handle->offset = offset_begin + tmp_nbytes;
+                off_t old_offset = lfs_handle->offset;
                 if ((rc = lfs_dump_buffer_immed(lfs_handle, tmp_buffer, tmp_nbytes)) != GLOBUS_SUCCESS) {
                     return rc;
                 }
+                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset jumps from %i to %i\n",old_offset, lfs_handle->offset);
+                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset blocks jumps from %i to %i\n",old_offset/lfs_handle->block_size, lfs_handle->offset/lfs_handle->block_size);
+                // lfs_handle->outstanding -= i - buffer_begin + 1;
                 if (tmp_nbytes > 0) {
                     wrote_something = 1;
                 }
@@ -408,7 +415,7 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
             } else {
                 // We chose to not dump immediately. Maybe the next pass will 
                 // push us over the edge.
-                accumulated_amount += nbytes[i];
+                accumulated_amount += nbytes[i]*sizeof(globus_byte_t);
             }
         }
     }
@@ -422,7 +429,11 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
     globus_result_t rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_dump_buffer_immed);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping buffer at %lu.\n", lfs_handle->offset);
+    if (nbytes % lfs_handle->block_size == 0) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping buffer at %lu length %u blocks.\n", lfs_handle->offset, nbytes/lfs_handle->block_size);
+    } else {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping buffer at %lu length %u.\n", lfs_handle->offset, nbytes);
+    }
     if (lfs_handle->syslog_host != NULL) {
         syslog(LOG_INFO, lfs_handle->syslog_msg, "WRITE", nbytes, lfs_handle->offset);
     }

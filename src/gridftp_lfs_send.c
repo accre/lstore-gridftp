@@ -419,9 +419,9 @@ lfs_dispatch_read(
 
     GlobusGFSName(lfs_dispatch_read);
 
-    globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
-                                                  &lfs_handle->optimal_count);
-
+    //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
+    //                                              &lfs_handle->optimal_count);
+    lfs_handle->optimal_count = (lfs_handle->preferred_write_size * 4) / lfs_handle->block_size;
     // Verify we have sufficient buffer space.
     if ((rc = allocate_buffers(lfs_handle, lfs_handle->optimal_count)) != GLOBUS_SUCCESS) {
         goto cleanup;
