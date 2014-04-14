@@ -43,16 +43,20 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         return lfs_handle->done_status;
     }
 
+    int retval;
     if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
-        if (lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs) != 0)
+        if ((retval = lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs)) != 0)
         {
+            rc  = retval;
             GenericError(lfs_handle, "Failed to close file in LFS.", rc);
             lfs_handle->fd = NULL;
         }
     } else {
-        if (close(lfs_handle->fd_posix) != 0)
+        if ((retval = close(lfs_handle->fd_posix)) != 0)
         {
-            GenericError(lfs_handle, "Failed to close file in LFS.", rc);
+            rc = retval;
+            GenericError(lfs_handle, "Failed to close file in POSIX.", rc);
+            lfs_handle->fd_posix = 0;
         }
     }
 
@@ -60,7 +64,8 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         globus_free(lfs_handle->buffer);
     if (lfs_handle->used)
         globus_free(lfs_handle->used);
-
+    if (lfs_handle->log_filename)
+        unlink(lfs_handle->log_filename);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "receive %d blocks of size %d bytes\n",
         lfs_handle->io_count, lfs_handle->io_block_size);
 

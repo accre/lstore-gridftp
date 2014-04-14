@@ -478,7 +478,10 @@ lfs_start(
         return;
     }
     strncpy(lfs_handle->username, session_info->username, strlength);
-
+    // TODO update this to pull from environment
+    lfs_handle->preferred_write_size = 1024 * 1024 * 10; // what to prefer to send to LFS
+    lfs_handle->write_size_buffers = 4; // how many of these chunks should we keep around
+    
     // Pull configuration from environment.
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
@@ -550,13 +553,24 @@ lfs_start(
         lfs_handle->lfs_config = lfs_config_char;
     }
 
+    // store the filename for the logs
+    lfs_handle->log_filename = globus_malloc(256);
+    if (lfs_handle->log_filename) {
+        memset(lfs_handle->log_filename, 0, 256);
+        snprintf(lfs_handle->log_filename, 255, "/lio/log/gridftp-%i", getpid());
+    }
+
     // fire up the mount point
     char * argv[] = {
+        "gridftp-dummy-plugin",
         "-o",
-        "big_writes,use_ino,kernel_cache"
+        "big_writes,use_ino,kernel_cache",
         "-c",
         lfs_handle->lfs_config,
-        "-d"
+        "-d",
+        "1",
+        "-log",
+        lfs_handle->log_filename
     };
     struct stat dummy;
     if (stat(lfs_handle->lfs_config,& dummy)) {
@@ -565,7 +579,7 @@ lfs_start(
         globus_gridftp_server_operation_finished(op, errno, &finished_info);
         return;
     }
-    lio_fuse_t *lfs = (struct lio_fuse_t *)lfs_init_real( NULL, 1, argv, lfs_handle->mount_point);
+    lio_fuse_t *lfs = (struct lio_fuse_t *)lfs_init_real( NULL, 9, argv, lfs_handle->mount_point);
     if (!lfs) {
         MemoryError(lfs_handle, "Unable to allocate a new LFS FileSystem.", rc);
         finished_info.result = rc;
@@ -673,6 +687,8 @@ lfs_destroy_gridftp(
             globus_free(lfs_handle->username);
         if (lfs_handle->local_host)
             globus_free(lfs_handle->local_host);
+        if (lfs_handle->log_filename)
+            globus_free(lfs_handle->log_filename);
         if (lfs_handle->syslog_msg)
             globus_free(lfs_handle->syslog_msg);
         remove_file_buffer(lfs_handle);

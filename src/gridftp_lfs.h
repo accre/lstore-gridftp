@@ -62,6 +62,9 @@ typedef struct globus_l_gfs_lfs_handle_s
     globus_byte_t *                     buffer;
     globus_off_t *                      offsets; // The offset of each buffer.
     globus_size_t *                     nbytes; // The number of bytes in each buffer.
+    unsigned int                        preferred_write_size; // what to prefer to send to LFS
+    unsigned int                        write_size_buffers; // how many of these chunks should we keep around
+    unsigned int                        min_buffer_count; // calculated after we know block size
     short *                             used;
     int                                 optimal_count;
     unsigned int                        max_buffer_count;
@@ -71,6 +74,7 @@ typedef struct globus_l_gfs_lfs_handle_s
     globus_mutex_t *                    mutex;
     int                                 port;
     char *                              lfs_config;
+    char *                              log_filename;
     char *                              host;
     char *                              mount_point;
     unsigned int                        mount_point_len;

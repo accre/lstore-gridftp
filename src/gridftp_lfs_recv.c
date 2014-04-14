@@ -51,11 +51,13 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
         if ((retval = lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs)) != 0)
         {
+            rc = retval;
             GenericError(lfs_handle, "Failed to close file in LFS.", retval);
             lfs_handle->fd = NULL;
         }
     } else {
         if ((retval = close(lfs_handle->fd_posix)) != 0) {
+            rc = retval;
             GenericError(lfs_handle, "Failed to close file in POSIX.", retval);
             lfs_handle->fd_posix = 0;
         }
@@ -87,6 +89,10 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         if ((lfs_handle->done_status == GLOBUS_SUCCESS) && (rc == GLOBUS_SUCCESS) && is_lfs_path(lfs_handle,lfs_handle->pathname)) {
             rc = lfs_save_checksum(lfs_handle);
         }
+    }
+    if (lfs_handle->sent_finish != GLOBUS_TRUE) {
+        if (lfs_handle->log_filename)
+            unlink(lfs_handle->log_filename);
     }
 
     set_close_done(lfs_handle, rc);
@@ -135,10 +141,13 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
     lfs_handle->done = GLOBUS_FALSE;
     lfs_handle->done_status = GLOBUS_SUCCESS;
     globus_gridftp_server_get_block_size(lfs_handle->op, &lfs_handle->block_size);
+    
+    // Since we have the block size, we can compute the min buffer count
+    lfs_handle->min_buffer_count = (lfs_handle->preferred_write_size * lfs_handle->write_size_buffers) / lfs_handle->block_size + 1;
 
     globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
                                                   &lfs_handle->optimal_count);
-    lfs_handle->buffer_count = lfs_handle->optimal_count;
+    lfs_handle->buffer_count = lfs_handle->min_buffer_count;
     lfs_handle->nbytes = globus_malloc(lfs_handle->buffer_count*sizeof(globus_size_t));
     lfs_handle->offsets = globus_malloc(lfs_handle->buffer_count*sizeof(globus_off_t));
     lfs_handle->used = globus_malloc(lfs_handle->buffer_count*sizeof(short));
@@ -151,6 +160,8 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
         MemoryError(lfs_handle, "Memory allocation error.", rc);
         return rc;
     }
+
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opened %u buffers.\n", lfs_handle->buffer_count);
     return GLOBUS_SUCCESS;
 }
 
@@ -343,17 +354,9 @@ lfs_handle_write_op(
         goto cleanup;
     }
 
-    // First, see if we can dump this block immediately.
-    if (offset == lfs_handle->offset) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping this block immediately.\n");
-        if ((rc = lfs_dump_buffer_immed(lfs_handle, buffer, nbytes)) != GLOBUS_SUCCESS) {
-            goto cleanup;
-        }
-    } else {
-        // Try to store the buffer into memory.
-        if ((rc = lfs_store_buffer(lfs_handle, buffer, offset, nbytes)) != GLOBUS_SUCCESS) {
-            goto cleanup;
-        }
+    // Try to store the buffer into memory.
+    if ((rc = lfs_store_buffer(lfs_handle, buffer, offset, nbytes)) != GLOBUS_SUCCESS) {
+        goto cleanup;
     }
 
     // Try to write out as many buffers as we can to LFS.
