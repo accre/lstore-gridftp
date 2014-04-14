@@ -182,9 +182,18 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
             (lfs_handle->used[preferred_location] == 0)) {
         i = preferred_location;
     } else {
-        for (i = 0; i<cnt; i++) {
+        int found_unpreferred = 0;
+        for (i = lfs_handle->min_buffer_size; i<cnt; i++) {
             if (lfs_handle->used[i] == 0) {
+                found_unpreferred = 1;
                 break;
+            }
+        }
+        if (!found_unpreferred) {
+            for (i = 0; i<cnt; i++) {
+                if (lfs_handle->used[i] == 0) {
+                    break;
+                }
             }
         }
     }
@@ -351,10 +360,14 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
                 offset_begin = lfs_handle->offset;
                 buffer_begin = i;
                 found_head = 1;
+                accumulated_amount = 0;
             }
             if (!found_head) {
                 continue;
             }
+            if (!lfs_handle->used[i]) {
+                SystemError(lfs_handle, "Missing used invariant in lfs_dump_buffers", errno);
+            }   
             /**
              * So, we would like to dump buffers IF any of:
              * 1) We are at the end of the list of buffers (i=cnt-1)
@@ -362,11 +375,15 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
              * 3) We have accumulated 10MB of data
              * 4) next buffer is used AND current_offset + block_size != next_offset
              */
-            if ( (i == cnt-1) ||
-                    (nbytes[i] != lfs_handle->block_size) ||
-                    (accumulated_amount > target_amount) ||
-                    ((lfs_handle->used[i+1] == 1) && 
-                     (offsets[i] + lfs_handle->block_size != offsets[i+1])) ) {
+            int checkOne = (i == cnt-1);
+            int checkTwo = (nbytes[i] != lfs_handle->block_size);
+            int checkThree = (accumulated_amount + lfs_handle->block_size >= 
+                                                                target_amount);
+            // this check makes no sense if we're at the end of the list
+            int checkFour = ((i != cnt -1) && (lfs_handle->used[i+1]) &&
+                                (offsets[i] + lfs_handle->block_size != 
+                                                                offsets[i+1]));
+            if ( checkOne || checkTwo || checkThree || checkFour ) {
                 globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "dumping %u to %u\n",
                                         buffer_begin, i);
                 // dump things out immediately
@@ -389,8 +406,9 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
                 found_head = 0;
                 accumulated_amount = 0;
             } else {
+                // We chose to not dump immediately. Maybe the next pass will 
+                // push us over the edge.
                 accumulated_amount += nbytes[i];
-                // we chose to not dump immediately. Maybe the next pass will push us over the edge.
             }
         }
     }
