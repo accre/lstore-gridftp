@@ -142,6 +142,10 @@ lfs_dump_buffers(
     globus_l_gfs_lfs_handle_t *      lfs_handle);
 
 globus_result_t
+lfs_dump_buffers_unbatched(
+    globus_l_gfs_lfs_handle_t *      lfs_handle);
+
+globus_result_t
 lfs_dump_buffer_immed(
     lfs_handle_t *                   lfs_handle,
     globus_byte_t *                   buffer,

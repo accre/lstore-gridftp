@@ -425,6 +425,39 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
     return rc;
 }
 
+globus_result_t
+lfs_dump_buffers_unbatched(lfs_handle_t *lfs_handle) {
+
+    globus_off_t * offsets = lfs_handle->offsets;
+    globus_size_t * nbytes = lfs_handle->nbytes;
+    size_t i, wrote_something;
+    size_t cnt = lfs_handle->buffer_count;
+    GlobusGFSName(globus_l_gfs_lfs_dump_buffers);
+
+    globus_result_t rc = GLOBUS_SUCCESS;
+
+    wrote_something=1;
+    // Loop through all our buffers; loop again if we write something.
+    while (wrote_something == 1) {
+        wrote_something=0;
+        // For each of our buffers.
+        for (i=0; i<cnt; i++) {
+            if (lfs_handle->used[i] == 1 && offsets[i] == lfs_handle->offset) {
+                globus_byte_t *tmp_buffer = lfs_handle->buffer+i*lfs_handle->block_size;
+                globus_size_t tmp_nbytes = nbytes[i]*sizeof(globus_byte_t);
+                if ((rc = lfs_dump_buffer_immed(lfs_handle, tmp_buffer, tmp_nbytes)) != GLOBUS_SUCCESS) {
+                    return rc;
+                }
+                if (tmp_nbytes > 0) {
+                    wrote_something = 1;
+                }
+                lfs_handle->used[i] = 0;
+            }
+        }
+    }
+    return rc;
+}
+
 globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globus_size_t nbytes) {
     globus_result_t rc = GLOBUS_SUCCESS;
 

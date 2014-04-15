@@ -398,6 +398,7 @@ cleanup:
         lfs_dispatch_write(lfs_handle);
     } else if (lfs_handle->outstanding == 0) {
         // No I/O in-flight, clean-up.
+        lfs_dump_buffers_unbatched(lfs_handle);
         rc = close_and_clean(lfs_handle, rc);
         if (!lfs_handle->sent_finish) {
             globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
