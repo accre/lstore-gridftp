@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <unistd.h>
 #include "gridftp_lfs.h"
 
 #define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
@@ -72,6 +73,7 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     globus_free(lfs_handle->used);
     globus_free(lfs_handle->nbytes);
     globus_free(lfs_handle->offsets);
+    globus_free(lfs_handle->buffer_pointers);
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "receive %d blocks of size %d bytes\n",
         lfs_handle->io_count, lfs_handle->io_block_size);
@@ -154,12 +156,14 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
     lfs_handle->nbytes = globus_malloc(lfs_handle->buffer_count*sizeof(globus_size_t));
     lfs_handle->offsets = globus_malloc(lfs_handle->buffer_count*sizeof(globus_off_t));
     lfs_handle->used = globus_malloc(lfs_handle->buffer_count*sizeof(short));
+    lfs_handle->buffer_pointers = globus_malloc(lfs_handle->buffer_count*sizeof(globus_byte_t *));
     int i;
     for (i=0; i<lfs_handle->buffer_count; i++)
         lfs_handle->used[i] = 0;
     lfs_handle->buffer = globus_malloc(lfs_handle->buffer_count*lfs_handle->block_size*sizeof(globus_byte_t));
     if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL ||
-            lfs_handle->offsets==NULL || lfs_handle->used==NULL) {
+            lfs_handle->offsets==NULL || lfs_handle->used==NULL ||
+            lfs_handle->buffer_pointers==NULL) {
         MemoryError(lfs_handle, "Memory allocation error.", rc);
         return rc;
     }
@@ -356,19 +360,21 @@ lfs_handle_write_op(
         set_done(lfs_handle, GLOBUS_SUCCESS);
         goto cleanup;
     }
-
-    // Try to store the buffer into memory.
+    
+    if (lfs_used_buffer_count(lfs_handle) > lfs_handle->stall_buffer_count) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Buffer count too high. Stalling.\n");
+        sleep(1);
+    }
+    // Try to store the buffer into memory, a seperate thread handles consuming
+    // this
     if ((rc = lfs_store_buffer(lfs_handle, buffer, offset, nbytes)) != GLOBUS_SUCCESS) {
         goto cleanup;
     }
 
-    // Try to write out as many buffers as we can to LFS.
     if ((rc = lfs_dump_buffers(lfs_handle)) != GLOBUS_SUCCESS) {
         goto cleanup;
     }
-
 cleanup:
-
     // Do some statistics
     if (rc == GLOBUS_SUCCESS) {
         if (nbytes != lfs_handle->io_block_size) {
@@ -387,10 +393,11 @@ cleanup:
     if (rc != GLOBUS_SUCCESS) {
         set_done(lfs_handle, rc);
     }
-
-    if (buffer) {
-        globus_free(buffer);
-    }
+    
+    // deallocate on the other side of the buffer thread
+    //if (buffer) {
+    //    globus_free(buffer);
+    //}
 
     lfs_handle->outstanding--;
     if (!is_done(lfs_handle)) {

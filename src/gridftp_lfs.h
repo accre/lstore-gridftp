@@ -54,12 +54,14 @@ typedef struct globus_l_gfs_lfs_handle_s
     int                                 fd_posix;
     globus_size_t                       block_size;
     globus_off_t                        op_length; // Length of the requested read/write size
-    globus_off_t                        offset;
+    globus_off_t                        offset; // offset on gridftp side
+    globus_off_t                        committed_offset; // offset against actual storage
     unsigned int                        done;
     globus_result_t                     done_status; // The status of the finished transfer.
     globus_bool_t                       sent_finish; // Whether or not we have sent the client an abort.
     globus_gfs_operation_t              op;
-    globus_byte_t *                     buffer;
+    globus_byte_t *                     buffer; // to be deprecated. one big char *
+    globus_byte_t **                    buffer_pointers; // list of pointers to char *s globus gave us
     globus_off_t *                      offsets; // The offset of each buffer.
     globus_size_t *                     nbytes; // The number of bytes in each buffer.
     unsigned int                        preferred_write_size; // what to prefer to send to LFS
@@ -67,11 +69,15 @@ typedef struct globus_l_gfs_lfs_handle_s
     unsigned int                        min_buffer_count; // calculated after we know block size
     short *                             used;
     int                                 optimal_count;
+    unsigned int                        stall_buffer_count;
     unsigned int                        max_buffer_count;
     unsigned int                        max_file_buffer_count;
     unsigned int                        buffer_count; // Number of buffers we currently maintain in memory waiting to be written to LFS.
     unsigned int                        outstanding;
     globus_mutex_t *                    mutex;
+    globus_mutex_t *                    buffer_mutex;
+    globus_mutex_t *                    offset_mutex;
+    globus_cond_t *                     offset_cond;
     int                                 port;
     char *                              lfs_config;
     char *                              log_filename;
@@ -147,10 +153,12 @@ lfs_dump_buffers_unbatched(
 
 globus_result_t
 lfs_dump_buffer_immed(
-    lfs_handle_t *                   lfs_handle,
+    globus_l_gfs_lfs_handle_t *       lfs_handle,
     globus_byte_t *                   buffer,
-    globus_size_t                     nbytes);
+    globus_size_t                     nbytes,
+    globus_off_t                      offset);
 
+globus_size_t lfs_used_buffer_count(globus_l_gfs_lfs_handle_t * lfs_handle);
 // Buffer management for reads
 inline globus_result_t
 allocate_buffers(

@@ -453,6 +453,9 @@ lfs_start(
     }
 
     lfs_handle->mutex = (globus_mutex_t *)malloc(sizeof(globus_mutex_t));
+    lfs_handle->offset_mutex = (globus_mutex_t *)malloc(sizeof(globus_mutex_t));
+    lfs_handle->buffer_mutex = (globus_mutex_t *)malloc(sizeof(globus_mutex_t));
+    lfs_handle->offset_cond = (globus_cond_t *)malloc(sizeof(globus_cond_t));
     if (!(lfs_handle->mutex)) {
         MemoryError(lfs_handle, "Unable to allocate a new mutex for LFS.", rc);
         finished_info.result = rc;
@@ -460,6 +463,24 @@ lfs_start(
         return;
     }
     if (globus_mutex_init(lfs_handle->mutex, GLOBUS_NULL)) {
+        SystemError(lfs_handle, "Unable to initialize mutex", rc);
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
+
+    if (globus_mutex_init(lfs_handle->offset_mutex, GLOBUS_NULL)) {
+        SystemError(lfs_handle, "Unable to initialize mutex", rc);
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
+
+    if (globus_cond_init(lfs_handle->offset_cond, (globus_condattr_t *) GLOBUS_NULL)) {
+        SystemError(lfs_handle, "Unable to initialize cond", rc);
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
+
+    if (globus_mutex_init(lfs_handle->buffer_mutex, GLOBUS_NULL)) {
         SystemError(lfs_handle, "Unable to initialize mutex", rc);
         globus_gridftp_server_operation_finished(op, rc, &finished_info);
         return;
@@ -482,7 +503,8 @@ lfs_start(
     // TODO update this to pull from environment
     lfs_handle->preferred_write_size = 1024 * 1024 * 10; // what to prefer to send to LFS
     lfs_handle->write_size_buffers = 4; // how many of these chunks should we keep around
-    
+    lfs_handle->stall_buffer_count = 120; // @ 256kB per buffer, this is 30MB
+
     // Pull configuration from environment.
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
@@ -693,9 +715,22 @@ lfs_destroy_gridftp(
         if (lfs_handle->syslog_msg)
             globus_free(lfs_handle->syslog_msg);
         remove_file_buffer(lfs_handle);
+        
         if (lfs_handle->mutex) {
             globus_mutex_destroy(lfs_handle->mutex);
             globus_free(lfs_handle->mutex);
+        }
+        if (lfs_handle->offset_mutex) {
+            globus_mutex_destroy(lfs_handle->offset_mutex);
+            globus_free(lfs_handle->offset_mutex);
+        }
+        if (lfs_handle->offset_cond) {
+            globus_cond_destroy(lfs_handle->offset_cond);
+            globus_free(lfs_handle->offset_cond);
+        }
+        if (lfs_handle->buffer_mutex) {
+            globus_mutex_destroy(lfs_handle->buffer_mutex);
+            globus_free(lfs_handle->buffer_mutex);
         }
         globus_free(lfs_handle);
     }
