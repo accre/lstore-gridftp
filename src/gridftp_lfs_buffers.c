@@ -2,7 +2,12 @@
 #include "gridftp_lfs.h"
 #include <syslog.h>
 #include <sys/mman.h>
+#include <sys/types.h>
 
+globus_result_t lfs_dump_buffer_queued(lfs_handle_t *lfs_handle, 
+                                        globus_byte_t *buffer,
+                                        globus_size_t nbytes,
+                                        globus_off_t offset);
 /*************************************************************************
  *  use_file_buffer
  *  ---------------
@@ -210,16 +215,16 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
         }
     }
    
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Trying to find a slot. Preferred %u chosen %u out of %u\n",
-                            preferred_location, i, lfs_handle->buffer_count);
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Trying to find a slot. Preferred %u chosen %u out of %u\n",
+                            //preferred_location, i, lfs_handle->buffer_count);
     // if i == cnt, we didn't find anywhere to stick this buffer..
     if (i != cnt) {
         if (offset % lfs_handle->block_size == 0) {
             snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; block offset %lu.\n", i, offset/lfs_handle->block_size);
-            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
         } else {
             snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; offset %lu.\n", i, offset);
-            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
         }
         lfs_handle->nbytes[i] = nbytes;
         lfs_handle->offsets[i] = offset;
@@ -240,8 +245,8 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
     i++;
 
     actual_cnt = min_buffers(cnt, lfs_handle);
-    snprintf(err_msg, MSG_SIZE, "There are %i extra buffers.\n", actual_cnt-i);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+    // snprintf(err_msg, MSG_SIZE, "There are %i extra buffers.\n", actual_cnt-i);
+    // globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
     // If there are more than 10 unused buffers, deallocate.
     if ((actual_cnt - i > 10) && (i > lfs_handle->min_buffer_count)) {
         snprintf(err_msg, MSG_SIZE, "About to deallocate %i buffers; %i will be left.\n", cnt-i, i);
@@ -379,11 +384,10 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
         }
         // For each of our buffers.
         int found_head = 0;
-        globus_mutex_lock(lfs_handle->offset_mutex);
         for (i=0; i<cnt; i++) {
             // Do checks to see if we're at the front of a train
             if (!found_head && lfs_handle->used[i] && offsets[i] == lfs_handle->offset) {
-                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Found beginning of buffer. Block %i\n", i);
+                // globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Found beginning of buffer. Block %i\n", i);
                 offset_begin = lfs_handle->offset;
                 buffer_begin = i;
                 found_head = 1;
@@ -426,8 +430,8 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
                     copy_pointer += nbytes[j];
                     globus_free(lfs_handle->buffer_pointers[j]);
                 }
-                off_t old_offset = lfs_handle->offset;
-                if ((rc = lfs_dump_buffer_immed(lfs_handle, tmp_buffer, tmp_nbytes, old_offset)) != GLOBUS_SUCCESS) {
+                globus_off_t old_offset = lfs_handle->offset;
+                if ((rc = lfs_dump_buffer_queued(lfs_handle, tmp_buffer, tmp_nbytes, old_offset)) != GLOBUS_SUCCESS) {
                     return rc;
                 }
                 lfs_handle->offset += tmp_nbytes;
@@ -448,7 +452,6 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
                 accumulated_amount += nbytes[i]*sizeof(globus_byte_t);
             }
         }
-        globus_mutex_unlock(lfs_handle->offset_mutex);
     }
     if (accumulated_amount != 0) {
         SystemError(lfs_handle, "accumulated_amount should be zero", errno);
@@ -488,6 +491,177 @@ lfs_dump_buffers_unbatched(lfs_handle_t *lfs_handle) {
         }
     }
     return rc;
+}
+// enqueue a transfer for the backend to perform
+globus_result_t lfs_dump_buffer_queued(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globus_size_t nbytes, globus_off_t offset) {
+    GlobusGFSName(lfs_dump_buffer_queued);
+    globus_result_t rc = GLOBUS_SUCCESS;
+    globus_mutex_lock(lfs_handle->buffer_mutex);
+    if ((!lfs_handle->queue_open) && (!lfs_handle->queue_head)) {
+        SystemError(lfs_handle, "Trying to write to backing store while writers are closed\n", rc);
+        globus_mutex_unlock(lfs_handle->buffer_mutex);
+        return -1;
+    }
+    lfs_queue_item_t * curr = globus_malloc(sizeof(lfs_queue_item_t));
+    if (!curr) {
+            MemoryError(lfs_handle, "Allocating backing queue\n", rc);
+            globus_mutex_unlock(lfs_handle->buffer_mutex);
+            return rc;
+    }
+    curr->buffer = buffer;
+    curr->nbytes = nbytes;
+    curr->offset = offset;
+    curr->next = NULL;
+    lfs_queue_item_t * target = lfs_handle->queue_head;
+    lfs_queue_item_t * prev = NULL;
+
+    while (lfs_handle->queued_bytes >= lfs_handle->max_queued_bytes) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Stalling out enqueued write\n");
+        globus_cond_wait(lfs_handle->dequeued_cond, lfs_handle->buffer_mutex);
+    }
+    target = lfs_handle->queue_head;
+    if (!lfs_handle->queue_head || (lfs_handle->queue_head->offset > curr->offset)) {
+        curr->next = lfs_handle->queue_head;
+        lfs_handle->queue_head = curr;
+    } else {
+        prev = target;
+        while (1) {
+            if (target->next == NULL) {
+                // tack this at the end
+                prev = target;
+                target = NULL;
+                break;
+            }
+            if (target->offset > curr->offset) {
+                break;
+            }
+            prev = target;
+            target = target->next;
+        }
+        curr->next = target;
+        prev->next = curr;
+    }
+    globus_off_t testoff = lfs_handle->queue_head->offset;
+    target = lfs_handle->queue_head;
+    while (target) {
+        if (testoff > target->offset) {
+            SystemError(lfs_handle, "Offsets out of order\n", rc);
+            globus_mutex_unlock(lfs_handle->buffer_mutex);
+            return -1;
+        }
+        testoff = target->offset;
+        target = target->next;
+    }
+    lfs_handle->queue_length += 1;
+    lfs_handle->queued_bytes += nbytes;
+    rc = lfs_handle->background_status;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Enqueueing write: %u Stalled: %u\n",
+                                                            lfs_handle->queue_length,
+                                                            lfs_handle->starved_ops);
+    globus_cond_signal(lfs_handle->queued_cond);
+    globus_mutex_unlock(lfs_handle->buffer_mutex);
+    return rc;
+}
+
+int lfs_dequeue_buffer(lfs_handle_t *lfs_handle, globus_byte_t **buffer, globus_size_t *nbytes, globus_off_t *offset) {
+    globus_mutex_lock(lfs_handle->buffer_mutex);
+    lfs_handle->starved_ops += 1;
+    while (1) {
+        if ((!lfs_handle->queue_open) && (!lfs_handle->queue_head)) {
+            lfs_handle->starved_ops -= 1;
+            globus_cond_signal(lfs_handle->dequeued_cond);
+            globus_mutex_unlock(lfs_handle->buffer_mutex);
+            return 0;
+        } else if (lfs_handle->queue_head) {
+            break;
+        }
+        globus_cond_wait(lfs_handle->queued_cond, lfs_handle->buffer_mutex);
+    }
+    lfs_handle->starved_ops -= 1;
+    lfs_queue_item_t * curr = lfs_handle->queue_head;
+    *buffer = curr->buffer;
+    *nbytes = curr->nbytes;
+    *offset = curr->offset;
+    lfs_handle->queue_head = curr->next;
+    lfs_handle->queued_bytes -= curr->nbytes;
+    lfs_handle->queue_length -= 1;
+    globus_free(curr);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Dequeueing write: %u Stalled: %u\n",
+                                                    lfs_handle->queue_length,
+                                                    lfs_handle->starved_ops);
+    globus_cond_signal(lfs_handle->dequeued_cond);
+    globus_mutex_unlock(lfs_handle->buffer_mutex);
+    return 1;
+}
+void lfs_throw_queue_error(lfs_handle_t *lfs_handle, globus_result_t rc) {
+    globus_mutex_lock(lfs_handle->buffer_mutex);
+    lfs_handle->background_status = rc;
+    globus_mutex_unlock(lfs_handle->buffer_mutex);
+}
+
+void * lfs_queue_handler(void * handle) {
+    lfs_handle_t * lfs_handle = (lfs_handle_t *) handle;
+
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Starting write backend\n");
+    globus_result_t rc = GLOBUS_SUCCESS;
+    globus_byte_t *buffer;
+    globus_size_t nbytes;
+    globus_off_t offset;
+    while (lfs_dequeue_buffer(lfs_handle, &buffer, &nbytes, &offset)) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Backend dumping buffer at %lu length %u blocks.\n", offset, nbytes/lfs_handle->block_size);
+        if ((rc = lfs_dump_buffer_immed(lfs_handle, buffer, nbytes, offset)) != GLOBUS_SUCCESS) {
+            lfs_throw_queue_error(lfs_handle, rc);
+        }
+    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Terminating write backend\n");
+    return NULL;
+}
+globus_result_t start_writers(lfs_handle_t *lfs_handle) {
+    globus_result_t rc = GLOBUS_SUCCESS;
+    GlobusGFSName(start_writers);
+    // concurrent writes
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Starting backend threads\n");
+    lfs_handle->write_pool = globus_malloc(lfs_handle->concurrent_writes *
+                                            sizeof(pthread_t));
+    if (!lfs_handle->write_pool) {
+        MemoryError(lfs_handle, "Couldn't allocate thread pool\n", rc);
+        return rc;
+    }
+    lfs_handle->queue_head = NULL;
+    lfs_handle->starved_ops = 0;
+    lfs_handle->blocked_ops = 0;
+    lfs_handle->background_status = GLOBUS_SUCCESS;
+    lfs_handle->queue_open = 1;
+    lfs_handle->blocked_writers = 0;
+    int i;
+    globus_result_t temp_rc;
+    for (i=0; i < lfs_handle->concurrent_writes; ++i) {
+        temp_rc = pthread_create(&lfs_handle->write_pool[i], NULL, lfs_queue_handler, (void *) lfs_handle);
+        if (temp_rc != GLOBUS_SUCCESS) {
+            rc = temp_rc;
+        }
+    }
+
+    return rc;
+}
+
+globus_result_t stop_writers(lfs_handle_t *lfs_handle) {
+    globus_result_t rc = GLOBUS_SUCCESS;
+    GlobusGFSName(stop_writers);
+    globus_mutex_lock(lfs_handle->buffer_mutex);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Stopping backend threads\n");
+    lfs_handle->queue_open = 0;
+    globus_cond_broadcast(lfs_handle->queued_cond);
+    globus_mutex_unlock(lfs_handle->buffer_mutex);
+    int i;
+    for (i=0; i < lfs_handle->concurrent_writes; ++i) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Stopping backend thread # %i\n", i);
+        globus_mutex_lock(lfs_handle->buffer_mutex);
+        globus_cond_broadcast(lfs_handle->queued_cond);
+        globus_mutex_unlock(lfs_handle->buffer_mutex);
+        pthread_join(lfs_handle->write_pool[i], NULL);
+    }
+    return NULL;
 }
 
 
@@ -531,30 +705,48 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
     }
 
 
-
     // Checksum after writing to disk.  This way, if a non-transient corruption occurs
     // during writing to Hadoop, we detect it and hopefully fail the file.
 
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum locking %lu (%lu) owner %i\n", offset, lfs_handle->offset_mutex,lfs_handle->offset_mutex->pthread.__data.__owner);
     globus_mutex_lock(lfs_handle->offset_mutex);
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum locked %lu owner %i\n", offset, lfs_handle->offset_mutex->pthread.__data.__owner);
     if (lfs_handle->cksm_types) {
+        lfs_handle->blocked_ops += 1;
+        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Preparing to checksum at offset %lu to %lu (current: %lu)\n", offset, offset + bytes_written,lfs_handle->committed_offset);
         while (lfs_handle->committed_offset != offset) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Preparing to checksum at offset %lu (current: %lu)\n", offset, lfs_handle->committed_offset);
-            globus_cond_wait(lfs_handle->offset_cond, lfs_handle->offset_mutex);
+            globus_abstime_t timer;
+            timer.tv_sec = 10;
+            timer.tv_nsec = 0;
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Waiting to checksum at offset %lu to %lu (current: %lu)\n", offset, offset + bytes_written, lfs_handle->committed_offset);
+            globus_cond_wait(lfs_handle->offset_cond,
+                                  lfs_handle->offset_mutex);
+
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Waited to checksum at offset %lu to %lu (current: %lu)\n", offset, offset + bytes_written, lfs_handle->committed_offset);
             if (lfs_handle->committed_offset > offset) {
                 // what the hell, man?
-                SystemError(lfs_handle, "The checksumming got skipped", rc);
                 globus_cond_broadcast(lfs_handle->offset_cond);
+                //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocking2 %lu\n", offset);
                 globus_mutex_unlock(lfs_handle->offset_mutex);
+                //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocked2 %lu\n", offset);
                 globus_free(buffer);
                 set_done(lfs_handle, rc);
+                lfs_handle->blocked_ops -= 1;
+                SystemError(lfs_handle, "The checksumming got skipped", rc);
                 return -1;
             }
         }
-        lfs_handle->committed_offset += nbytes;
-        lfs_update_checksums(lfs_handle, buffer, nbytes);
+        lfs_handle->blocked_ops -= 1;
+        lfs_handle->committed_offset += bytes_written;
+        lfs_update_checksums(lfs_handle, buffer, bytes_written);
         globus_cond_broadcast(lfs_handle->offset_cond);
     }
-    globus_mutex_unlock(lfs_handle->offset_mutex);
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocking owner %lu\n", offset, lfs_handle->offset_mutex->pthread.__data.__owner);
+    if ((rc = globus_mutex_unlock(lfs_handle->offset_mutex)) != GLOBUS_SUCCESS) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Mutex fail %lu\n", rc);
+        SystemError(lfs_handle, "Couldn't unlock mutex", rc);
+    }
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocked %lu\n", offset);
     globus_free(buffer);
     return rc;
 }

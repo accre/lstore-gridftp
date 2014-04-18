@@ -43,6 +43,13 @@ extern globus_version_t gridftp_lfs_local_version;
 #define LFS_CKSM_TYPE_ADLER32 4
 #define LFS_CKSM_TYPE_MD5     8
 
+typedef struct lfs_queue_item_s {
+    globus_byte_t * buffer;
+    globus_size_t nbytes;
+    globus_off_t offset;
+    struct lfs_queue_item_s * next;
+} lfs_queue_item_t;
+
 typedef struct globus_l_gfs_lfs_handle_s
 {
     char *                              pathname;
@@ -59,6 +66,16 @@ typedef struct globus_l_gfs_lfs_handle_s
     unsigned int                        done;
     globus_result_t                     done_status; // The status of the finished transfer.
     globus_bool_t                       sent_finish; // Whether or not we have sent the client an abort.
+    globus_bool_t                       queue_open; // Whether or not the queue should be open
+    lfs_queue_item_t *                  queue_head;
+    unsigned int                        queue_length;
+    globus_result_t                     background_status;
+    unsigned int                        starved_ops;
+    unsigned int                        blocked_ops;
+    unsigned int                        concurrent_writes;
+    globus_size_t                       queued_bytes;
+    globus_size_t                       max_queued_bytes;
+    pthread_t *                         write_pool;
     globus_gfs_operation_t              op;
     globus_byte_t *                     buffer; // to be deprecated. one big char *
     globus_byte_t **                    buffer_pointers; // list of pointers to char *s globus gave us
@@ -78,6 +95,9 @@ typedef struct globus_l_gfs_lfs_handle_s
     globus_mutex_t *                    buffer_mutex;
     globus_mutex_t *                    offset_mutex;
     globus_cond_t *                     offset_cond;
+    globus_cond_t *                     queued_cond;    // triggered when something is added to the queue
+    globus_cond_t *                     dequeued_cond;  // triggered when something is popped off the queue
+    unsigned int                        blocked_writers;
     int                                 port;
     char *                              lfs_config;
     char *                              log_filename;
@@ -159,6 +179,9 @@ lfs_dump_buffer_immed(
     globus_off_t                      offset);
 
 globus_size_t lfs_used_buffer_count(globus_l_gfs_lfs_handle_t * lfs_handle);
+globus_result_t start_writers(lfs_handle_t *lfs_handle);
+globus_result_t stop_writers(lfs_handle_t *lfs_handle);
+
 // Buffer management for reads
 inline globus_result_t
 allocate_buffers(

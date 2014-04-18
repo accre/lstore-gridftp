@@ -428,7 +428,7 @@ lfs_start(
     GlobusGFSName(lfs_start);
     globus_result_t rc;
     int max_file_buffer_count = 1500;
-    int load_limit = 20;
+    int load_limit = 50;
     int replicas;
     int port;
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Entering lfs_start.\n");
@@ -452,10 +452,12 @@ lfs_start(
         return;
     }
 
-    lfs_handle->mutex = (globus_mutex_t *)malloc(sizeof(globus_mutex_t));
-    lfs_handle->offset_mutex = (globus_mutex_t *)malloc(sizeof(globus_mutex_t));
-    lfs_handle->buffer_mutex = (globus_mutex_t *)malloc(sizeof(globus_mutex_t));
-    lfs_handle->offset_cond = (globus_cond_t *)malloc(sizeof(globus_cond_t));
+    lfs_handle->mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
+    lfs_handle->offset_mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
+    lfs_handle->buffer_mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
+    lfs_handle->offset_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
+    lfs_handle->queued_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
+    lfs_handle->dequeued_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
     if (!(lfs_handle->mutex)) {
         MemoryError(lfs_handle, "Unable to allocate a new mutex for LFS.", rc);
         finished_info.result = rc;
@@ -475,6 +477,18 @@ lfs_start(
     }
 
     if (globus_cond_init(lfs_handle->offset_cond, (globus_condattr_t *) GLOBUS_NULL)) {
+        SystemError(lfs_handle, "Unable to initialize cond", rc);
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
+
+    if (globus_cond_init(lfs_handle->queued_cond, (globus_condattr_t *) GLOBUS_NULL)) {
+        SystemError(lfs_handle, "Unable to initialize cond", rc);
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
+
+    if (globus_cond_init(lfs_handle->dequeued_cond, (globus_condattr_t *) GLOBUS_NULL)) {
         SystemError(lfs_handle, "Unable to initialize cond", rc);
         globus_gridftp_server_operation_finished(op, rc, &finished_info);
         return;
@@ -502,9 +516,10 @@ lfs_start(
     strncpy(lfs_handle->username, session_info->username, strlength);
     // TODO update this to pull from environment
     lfs_handle->preferred_write_size = 1024 * 1024 * 10; // what to prefer to send to LFS
-    lfs_handle->write_size_buffers = 4; // how many of these chunks should we keep around
+    lfs_handle->write_size_buffers = 2; // how many of these chunks should we keep around
     lfs_handle->stall_buffer_count = 120; // @ 256kB per buffer, this is 30MB
-
+    lfs_handle->concurrent_writes = 10;
+    lfs_handle->max_queued_bytes = 100 * 1024 * 1024; // how much to store on the backend (100MB)
     // Pull configuration from environment.
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
@@ -675,7 +690,7 @@ lfs_start(
             "Checksum algorithms in use: %s.\n", checksums_char);
         lfs_parse_checksum_types(lfs_handle, checksums_char);
     } else {
-        lfs_handle->cksm_types =  LFS_CKSM_TYPE_MD5 | LFS_CKSM_TYPE_ADLER32 | LFS_CKSM_TYPE_CRC32 | LFS_CKSM_TYPE_CKSUM;
+        lfs_handle->cksm_types =  LFS_CKSM_TYPE_ADLER32 | LFS_CKSM_TYPE_CKSUM;
     }
     lfs_handle->tmp_file_pattern = (char *)NULL;
 
@@ -714,7 +729,7 @@ lfs_destroy_gridftp(
             globus_free(lfs_handle->log_filename);
         if (lfs_handle->syslog_msg)
             globus_free(lfs_handle->syslog_msg);
-        remove_file_buffer(lfs_handle);
+            remove_file_buffer(lfs_handle);
         
         if (lfs_handle->mutex) {
             globus_mutex_destroy(lfs_handle->mutex);
@@ -727,6 +742,14 @@ lfs_destroy_gridftp(
         if (lfs_handle->offset_cond) {
             globus_cond_destroy(lfs_handle->offset_cond);
             globus_free(lfs_handle->offset_cond);
+        }
+        if (lfs_handle->queued_cond) {
+            globus_cond_destroy(lfs_handle->queued_cond);
+            globus_free(lfs_handle->queued_cond);
+        }
+        if (lfs_handle->dequeued_cond) {
+            globus_cond_destroy(lfs_handle->dequeued_cond);
+            globus_free(lfs_handle->dequeued_cond);
         }
         if (lfs_handle->buffer_mutex) {
             globus_mutex_destroy(lfs_handle->buffer_mutex);
