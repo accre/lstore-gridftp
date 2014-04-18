@@ -428,7 +428,7 @@ lfs_start(
     GlobusGFSName(lfs_start);
     globus_result_t rc;
     int max_file_buffer_count = 1500;
-    int load_limit = 50;
+    int load_limit = 30;
     int replicas;
     int port;
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Entering lfs_start.\n");
@@ -517,9 +517,9 @@ lfs_start(
     // TODO update this to pull from environment
     lfs_handle->preferred_write_size = 1024 * 1024 * 10; // what to prefer to send to LFS
     lfs_handle->write_size_buffers = 2; // how many of these chunks should we keep around
-    lfs_handle->stall_buffer_count = 120; // @ 256kB per buffer, this is 30MB
-    lfs_handle->concurrent_writes = 10;
-    lfs_handle->max_queued_bytes = 100 * 1024 * 1024; // how much to store on the backend (100MB)
+    lfs_handle->stall_buffer_count = 70; // @ 256kB per buffer, this is 30MB
+    lfs_handle->concurrent_writes = 5;
+    lfs_handle->max_queued_bytes = 110 * 1024 * 1024; // how much to store on the backend (100MB)
     // Pull configuration from environment.
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
@@ -665,7 +665,7 @@ lfs_start(
         load = strtod(token, NULL);
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Detected system load %.2f.\n", load);
         if ((load >= load_limit) && (load < 1000)) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Preventing gridftp transfer startup due to system load of %.2f.\n", load);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Preventing gridftp transfer startup due to system load of %.2f.\n", load);
             sleep(5);
         } else {
             break;
