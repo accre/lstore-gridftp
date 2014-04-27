@@ -365,8 +365,8 @@ lfs_handle_write_op(
         goto cleanup;
     }
     
-    globus_mutex_lock(lfs_handle->buffer_mutex);
     if (lfs_handle->queued_bytes > (lfs_handle->max_queued_bytes / 2)) {
+        STATSD_COUNT("stall_big",1);
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Internal queue count too high. Stalling. (%lu > %lu);\n",
                                     lfs_handle->queued_bytes, lfs_handle->max_queued_bytes/2);
         if (lfs_handle->queued_bytes > (3 * lfs_handle->max_queued_bytes / 4)) {
@@ -374,11 +374,12 @@ lfs_handle_write_op(
         }
         sleep(1);
     }
-    globus_mutex_unlock(lfs_handle->buffer_mutex);
     
     if (lfs_used_buffer_count(lfs_handle) > lfs_handle->stall_buffer_count) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Buffer count too high. Stalling.\n");
-        lfs_dump_buffers_unbatched(lfs_handle);
+        STATSD_COUNT("stall_small",1);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Buffer count too high (%i > %i). Stalling.\n",
+                                    lfs_used_buffer_count(lfs_handle),
+                                    lfs_handle->stall_buffer_count);
         sleep(1);
     }
     

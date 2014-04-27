@@ -729,8 +729,6 @@ lfs_destroy_gridftp(
             globus_free(lfs_handle->log_filename);
         if (lfs_handle->syslog_msg)
             globus_free(lfs_handle->syslog_msg);
-            remove_file_buffer(lfs_handle);
-        
         if (lfs_handle->mutex) {
             globus_mutex_destroy(lfs_handle->mutex);
             globus_free(lfs_handle->mutex);

@@ -8,140 +8,61 @@ globus_result_t lfs_dump_buffer_queued(lfs_handle_t *lfs_handle,
                                         globus_byte_t *buffer,
                                         globus_size_t nbytes,
                                         globus_off_t offset);
-/*************************************************************************
- *  use_file_buffer
- *  ---------------
- *  Decide whether we should use a file buffer based on the current
- *  memory usage.
- *  Returns 1 if we should use a file buffer.
- *  Else, returns 0.
- ************************************************************************/
-static inline int
-use_file_buffer(globus_l_gfs_lfs_handle_t * lfs_handle) {
 
-    unsigned int buffer_count = lfs_handle->buffer_count;
-
-    if (buffer_count >= lfs_handle->max_buffer_count-1) {
-        return 1;
+globus_result_t add_by_offset(lfs_queue_item_t ** head, lfs_queue_item_t * curr) {
+    GlobusGFSName(add_by_offset);
+    lfs_queue_item_t * prev = NULL;
+    lfs_queue_item_t * target = (*head);
+    curr->next = NULL;
+    if (!(*head) || ((*head)->offset > curr->offset)) {
+        curr->next = (*head);
+        (*head) = curr;
+    } else {
+        prev = target;
+        while (1) {
+            if (target->offset > curr->offset) {
+                break;
+            }
+            if (target->next == NULL) {
+                // tack this at the end
+                prev = target;
+                target = NULL;
+                break;
+            } 
+            prev = target;
+            target = target->next;
+        }
+        curr->next = target;
+        prev->next = curr;
     }
-    if ((lfs_handle->using_file_buffer == 1) && (buffer_count > lfs_handle->max_buffer_count/2)) {
-        return 1;
+    globus_off_t testoff = (*head)->offset;
+    target = (*head);
+    while (target) {
+        if (testoff > target->offset) {
+            globus_result_t rc = GlobusGFSErrorGeneric("Failed to add to small buffer");
+            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Can't sort, %i > %i\n", testoff, target->offset);
+            return rc;
+        }
+        testoff = target->offset;
+        target = target->next;
     }
     return 0;
 }
 
-/*************************************************************************
- *  remove_file_buffer
- *  ------------------
- *  This is called when cleaning up a file buffer. The file on disk is removed and
- *  the internal memory for storing the filename is freed.
- ************************************************************************/
-
-void
-remove_file_buffer(lfs_handle_t * lfs_handle) {
-    if (lfs_handle->tmp_file_pattern) {
-        snprintf(err_msg, MSG_SIZE, "Removing file buffer %s.\n", lfs_handle->tmp_file_pattern);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, err_msg);
-        globus_free(lfs_handle->tmp_file_pattern);
-        lfs_handle->tmp_file_pattern = (char *)NULL;
+globus_size_t buffer_length(lfs_queue_item_t * head) {
+    lfs_queue_item_t * current_element = head;
+    globus_size_t count = 0;
+    while (current_element) {
+        count += 1;
+        current_element = current_element->next;
     }
-}
-
-/**
- *  Initialize backing store
- */
-static globus_result_t lfs_initialize_file(globus_l_gfs_lfs_handle_t * lfs_handle) {
-    int i, cnt;
-    globus_result_t rc = GLOBUS_SUCCESS;
-    // Initial file buffer.
-    GlobusGFSName(globus_l_gfs_lfs_initialize_file);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Switching from memory buffer to file buffer.\n");
-
-    char *tmpdir=getenv("TMPDIR");
-    if (tmpdir == NULL) {
-        tmpdir = "/tmp";
-    }
-    lfs_handle->tmp_file_pattern = globus_malloc(sizeof(char) * (strlen(tmpdir) + 32));
-    sprintf(lfs_handle->tmp_file_pattern, "%s/gridftp-lfs-buffer-XXXXXX", tmpdir);
-
-    lfs_handle->tmpfilefd = mkstemp(lfs_handle->tmp_file_pattern);
-    int filedes = lfs_handle->tmpfilefd;
-    if (filedes == -1) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to determine file descriptor of temporary file.\n");
-            rc = GlobusGFSErrorGeneric("Failed to determine file descriptor of temporary file.");
-            remove_file_buffer(lfs_handle);
-            return rc;
-    }
-    unlink(lfs_handle->tmp_file_pattern);
-    snprintf(err_msg, MSG_SIZE, "Created file buffer %s.\n", lfs_handle->tmp_file_pattern);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, err_msg);
-    char * tmp_write = globus_calloc(lfs_handle->block_size, sizeof(globus_byte_t));
-    if (tmp_write == NULL) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Could not allocate memory for dumping file buffer.\n");
-        rc = GlobusGFSErrorGeneric("Could not allocate memory for dumping file buffer.");
-        return rc;
-    }
-    /* Write into the file to create its initial size */
-    cnt = lfs_handle->buffer_count;
-    for (i=0; i<cnt; i++) {
-        if (write(filedes, tmp_write, sizeof(globus_byte_t)*lfs_handle->block_size) < 0) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to initialize backing file.\n");
-            rc = GlobusGFSErrorGeneric("Failed to initialize backing file.");
-            globus_free(tmp_write);
-            return rc;
-        }
-    }
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Pre-filled file buffer with empty data.\n");
-    globus_free(tmp_write);
-    return rc;
-}
-
-static globus_result_t lfs_populate_mmap(globus_l_gfs_lfs_handle_t* lfs_handle) {
-    GlobusGFSName(lfs_populate_mmap);
-    int filedes = lfs_handle->tmpfilefd, cnt;
-    globus_result_t rc = GLOBUS_SUCCESS;
-    globus_byte_t * file_buffer = mmap(0, lfs_handle->block_size*lfs_handle->max_file_buffer_count*sizeof(globus_byte_t),
-        PROT_READ | PROT_WRITE, MAP_SHARED, filedes, 0);
-    if (file_buffer == (globus_byte_t *)-1) {
-        if (errno == ENOMEM) {
-            snprintf(err_msg, MSG_SIZE, "Error mmapping the file buffer (%ld bytes): errno=ENOMEM\n",
-                lfs_handle->block_size*lfs_handle->max_file_buffer_count*sizeof(globus_byte_t));
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, err_msg);
-        } else {
-            snprintf(err_msg, MSG_SIZE, "Error mmapping the file buffer: errno=%d\n", errno);
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, err_msg);
-        }
-        remove_file_buffer(lfs_handle);
-        rc = GlobusGFSErrorGeneric("Failed to mmap() the file buffer.");
-        return rc;
-    }
-    cnt = lfs_handle->buffer_count;
-    memcpy(file_buffer, lfs_handle->buffer, cnt*lfs_handle->block_size*sizeof(globus_byte_t));
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Memory buffers copied to disk buffer.\n");
-    globus_free(lfs_handle->buffer);
-    lfs_handle->buffer = file_buffer;
-    lfs_handle->using_file_buffer = 1;
-    return GLOBUS_SUCCESS;
-}
-
-int min_buffers(int a, globus_l_gfs_lfs_handle_t * lfs_handle) { 
-    if (a < lfs_handle->min_buffer_count) { 
-        return lfs_handle->min_buffer_count; 
-    } else { 
-        return a;
-    }
+    return count;
 }
 
 globus_size_t lfs_used_buffer_count(globus_l_gfs_lfs_handle_t * lfs_handle) {
-    int i, cnt = lfs_handle->buffer_count;
-    globus_size_t result = 0;
-    for (i=0; i<cnt; i++) {
-        if (lfs_handle->used[i]) {
-            ++result;
-        }
-    }
-    return result;
+    return lfs_handle->small_queue_length;
 }
+
 /**
  *  Store the current output to a buffer.
  */
@@ -157,118 +78,24 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
         return rc;
     }
 
-    // Determine the type of buffer to use; allocate or transfer buffers as necessary
-    int use_buffer = use_file_buffer(lfs_handle);
-    if ((use_buffer == 1) && (lfs_handle->using_file_buffer == 0)) {
-        if ((rc = lfs_initialize_file(lfs_handle)) != GLOBUS_SUCCESS) {
-            return rc;
-        }
-        if ((rc = lfs_populate_mmap(lfs_handle)) != GLOBUS_SUCCESS) {
-            return rc;
-        }
-    } else if (use_buffer == 1) {
-        // Do nothing.  Continue to use the file buffer for now.
-    } else if (lfs_handle->using_file_buffer == 1 && cnt < lfs_handle->max_buffer_count) {
-        // Turn off file buffering; copy data to a new memory buffer
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Switching from file buffer to memory buffer.\n");
-        actual_cnt = min_buffers(cnt, lfs_handle);
-        globus_byte_t * tmp_buffer = globus_malloc(sizeof(globus_byte_t)*lfs_handle->block_size*actual_cnt);
-        if (tmp_buffer == NULL) {
-            rc = GlobusGFSErrorGeneric("Memory allocation error.");
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Memory allocation error.");
-            return rc;
-        }
-        memcpy(tmp_buffer, lfs_handle->buffer, actual_cnt*lfs_handle->block_size*sizeof(globus_byte_t));
-        munmap(lfs_handle->buffer, lfs_handle->block_size*lfs_handle->buffer_count*sizeof(globus_byte_t));
-        lfs_handle->using_file_buffer = 0;
-        close(lfs_handle->tmpfilefd);
-        remove_file_buffer(lfs_handle);
-        lfs_handle->buffer = tmp_buffer;
+    unsigned int count = 0;
+    lfs_queue_item_t * current_element;
+    if (lfs_handle->small_queue_length != buffer_length(lfs_handle->small_queue_head)) {
+        rc = GlobusGFSErrorGeneric("Dropped list elements");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Can't count list element pre (expected: %i, actual: %i)\n",
+                                    lfs_handle->small_queue_length, count);
+        globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
+        return rc;
+    }
+
+    // try to find some extra list bits in the free list
+    if (lfs_handle->free_head != NULL) {
+        current_element =  lfs_handle->free_head;
+        lfs_handle->free_head = lfs_handle->free_head->next;
+        lfs_handle->free_length -= 1;
     } else {
-            // Do nothing.  Continue to use the file buffer for now.
-    }
-
-    // Search for a free space in our buffer, and then actually make the copy.
-    // Prefer to put it into the right place based on modulo math
-    int preferred_location = (offset % 
-                                (lfs_handle->preferred_write_size *
-                                 lfs_handle->write_size_buffers) ) / 
-                             lfs_handle->block_size;
-
-    if ((preferred_location < lfs_handle->buffer_count) &&
-            (lfs_handle->used[preferred_location] == 0)) {
-        i = preferred_location;
-    } else {
-        int found_unpreferred = 0;
-        for (i = lfs_handle->min_buffer_count; i<cnt; i++) {
-            if (lfs_handle->used[i] == 0) {
-                found_unpreferred = 1;
-                break;
-            }
-        }
-        if (!found_unpreferred) {
-            for (i = 0; i<cnt; i++) {
-                if (lfs_handle->used[i] == 0) {
-                    break;
-                }
-            }
-        }
-    }
-   
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Trying to find a slot. Preferred %u chosen %u out of %u\n",
-                            //preferred_location, i, lfs_handle->buffer_count);
-    // if i == cnt, we didn't find anywhere to stick this buffer..
-    if (i != cnt) {
-        if (offset % lfs_handle->block_size == 0) {
-            snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; block offset %lu.\n", i, offset/lfs_handle->block_size);
-            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
-        } else {
-            snprintf(err_msg, MSG_SIZE, "Stored some bytes in buffer %d; offset %lu.\n", i, offset);
-            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
-        }
-        lfs_handle->nbytes[i] = nbytes;
-        lfs_handle->offsets[i] = offset;
-        lfs_handle->used[i] = 1;
-        lfs_handle->buffer_pointers[i] = buffer;
-        wrote_something=1;
-        memcpy(lfs_handle->buffer+i*lfs_handle->block_size, buffer, nbytes*sizeof(globus_byte_t));
-    }
-
-    // Check to see how many unused buffers we have;
-    i = cnt;
-    while (i>0) {
-        i--;
-        if ((lfs_handle->used[i] == 1) || (i <= lfs_handle->min_buffer_count)) {
-            break;
-        }
-    }
-    i++;
-
-    actual_cnt = min_buffers(cnt, lfs_handle);
-    // snprintf(err_msg, MSG_SIZE, "There are %i extra buffers.\n", actual_cnt-i);
-    // globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
-    // If there are more than 10 unused buffers, deallocate.
-    if ((actual_cnt - i > 10) && (i > lfs_handle->min_buffer_count)) {
-        snprintf(err_msg, MSG_SIZE, "About to deallocate %i buffers; %i will be left.\n", cnt-i, i);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
-        lfs_handle->buffer_count = min_buffers(i, lfs_handle);
-        lfs_handle->nbytes = globus_realloc(lfs_handle->nbytes, lfs_handle->buffer_count*sizeof(globus_size_t));
-        lfs_handle->offsets = globus_realloc(lfs_handle->offsets, lfs_handle->buffer_count*sizeof(globus_off_t));
-        lfs_handle->used = globus_realloc(lfs_handle->used, lfs_handle->buffer_count*sizeof(short));
-        lfs_handle->buffer_pointers = globus_realloc(lfs_handle->buffer_pointers, lfs_handle->buffer_count*sizeof(globus_byte_t *));
-        if (lfs_handle->using_file_buffer == 0)
-            lfs_handle->buffer = globus_realloc(lfs_handle->buffer, lfs_handle->buffer_count*lfs_handle->block_size*sizeof(globus_byte_t));
-        else {
-            // Truncate the file holding our backing data (note we don't resize the mmap).
-            if (ftruncate(lfs_handle->tmpfilefd, lfs_handle->buffer_count*lfs_handle->block_size*sizeof(globus_byte_t))) {
-                rc = GlobusGFSErrorGeneric("Unable to truncate our file-backed data.");
-                globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Unable to truncate our file-backed data.\n");
-            }
-            lseek(lfs_handle->tmpfilefd, 0, SEEK_END);
-        }
-        if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL || 
-                lfs_handle->offsets==NULL || lfs_handle->used==NULL ||
-                lfs_handle->buffer_pointers==NULL) {
+        current_element = globus_malloc(sizeof(lfs_queue_item_t));
+        if (!current_element) {
             rc = GlobusGFSErrorGeneric("Memory allocation error.");
             globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Memory allocation error.");
             globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
@@ -276,83 +103,25 @@ globus_result_t lfs_store_buffer(globus_l_gfs_lfs_handle_t * lfs_handle, globus_
         }
     }
 
-    // If wrote_something=0, then we have filled up all our buffers; allocate a new one.
-    if (wrote_something == 0) {
-        lfs_handle->buffer_count += 1;
-        if (lfs_handle->buffer_count > lfs_handle->max_buffer_count/2) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Initializing buffer number %d.\n", lfs_handle->buffer_count);
-        } else {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Initializing buffer number %d.\n", lfs_handle->buffer_count);
-        }
-        // Refuse to allocate more than the max.
-        if ((lfs_handle->using_file_buffer == 0) && (lfs_handle->buffer_count == lfs_handle->max_buffer_count)) {
-            // Out of memory buffers; we really shouldn't hit this code anymore.
-            char * hostname = globus_malloc(sizeof(char)*256);
-            memset(hostname, '\0', sizeof(char)*256);
-            if (gethostname(hostname, 255) != 0) {
-                sprintf(hostname, "UNKNOWN");
-            }
-            snprintf(err_msg, MSG_SIZE, "Allocated all %i memory buffers on server %s; aborting transfer.", lfs_handle->max_buffer_count, hostname);
-            globus_free(hostname);
-            rc = GlobusGFSErrorGeneric(err_msg);
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to store data into LFS buffer.\n");
-        } else if ((lfs_handle->using_file_buffer == 1) && (lfs_handle->buffer_count == lfs_handle->max_file_buffer_count)) {
-            // Out of file buffers.
-            char * hostname = globus_malloc(sizeof(char)*256);
-            memset(hostname, '\0', sizeof(char)*256);
-            if (gethostname(hostname, 255) != 0) {
-                sprintf(hostname, "UNKNOWN");
-            }
-            snprintf(err_msg, MSG_SIZE, "Allocated all %i file-backed buffers on server %s; aborting transfer.", lfs_handle->max_file_buffer_count, hostname);
-            globus_free(hostname);
-            rc = GlobusGFSErrorGeneric(err_msg);
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to store data into LFS file buffer.\n");
-        } else {
-            // Increase the size of all our buffers which track memory usage
-            lfs_handle->nbytes = globus_realloc(lfs_handle->nbytes, lfs_handle->buffer_count*sizeof(globus_size_t));
-            lfs_handle->offsets = globus_realloc(lfs_handle->offsets, lfs_handle->buffer_count*sizeof(globus_off_t));
-            lfs_handle->used = globus_realloc(lfs_handle->used, lfs_handle->buffer_count*sizeof(short));
-            lfs_handle->buffer_pointers = globus_realloc(lfs_handle->buffer_pointers, lfs_handle->buffer_count*sizeof(short));
-            lfs_handle->used[lfs_handle->buffer_count-1] = 1;
-            // Only reallocate the physical buffer if we're using a memory buffer, otherwise we screw up our mmap
-            if (lfs_handle->using_file_buffer == 0) {
-                lfs_handle->buffer = globus_realloc(lfs_handle->buffer, lfs_handle->buffer_count*lfs_handle->block_size*sizeof(globus_byte_t));
-            } else {
-                // This not only extends the size of our file, but we extend it with the desired buffer data.
-                lseek(lfs_handle->tmpfilefd, (lfs_handle->buffer_count-1)*lfs_handle->block_size, SEEK_SET);
-                if (write(lfs_handle->tmpfilefd, buffer, nbytes*sizeof(globus_byte_t)) < 0) {
-                    rc = GlobusGFSErrorGeneric("Unable to extend our file-backed buffers; aborting transfer.");
-                    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Unable to extend our file-backed buffers; aborting transfer.\n");
-                }
-                // If our buffer was too small,
-                if (nbytes < lfs_handle->block_size) {
-                    int addl_size = lfs_handle->block_size-nbytes;
-                    char * tmp_write = globus_calloc(addl_size, sizeof(globus_byte_t));
-                    if (write(lfs_handle->tmpfilefd, tmp_write, sizeof(globus_byte_t)*addl_size) < 0) {
-                        rc = GlobusGFSErrorGeneric("Unable to extend our file-backed buffers; aborting transfer.");
-                        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Unable to extend our file-backed buffers; aborting transfer.\n");
-                    }
-                    globus_free(tmp_write);
-                }
-                //lfs_handle->buffer = mmap(lfs_handle->buffer, lfs_handle->block_size*lfs_handle->max_file_buffer_count*sizeof(globus_byte_t), PROT_READ | PROT_WRITE, MAP_PRIVATE, lfs_handle->tmpfilefd, 0);
-            }
-            if (lfs_handle->buffer == NULL || lfs_handle->nbytes==NULL || 
-                    lfs_handle->offsets==NULL || lfs_handle->used==NULL ||
-                    lfs_handle->buffer_pointers==NULL) {
-                rc = GlobusGFSErrorGeneric("Memory allocation error.");
-                globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Memory allocation error.\n");
-                globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
-            }
-            // In the case where we have file buffers, we already wrote the contents of buffer previously.
-            if (lfs_handle->using_file_buffer == 0) {
-                memcpy(lfs_handle->buffer+(lfs_handle->buffer_count-1)*lfs_handle->block_size, buffer, nbytes*sizeof(globus_byte_t));
-            }
-            lfs_handle->nbytes[lfs_handle->buffer_count-1] = nbytes;
-            lfs_handle->offsets[lfs_handle->buffer_count-1] = offset;
-            lfs_handle->buffer_pointers[i] = buffer;
-        }
+    current_element->buffer = buffer;
+    current_element->nbytes = nbytes;
+    current_element->offset = offset;
+    if (add_by_offset(&lfs_handle->small_queue_head, current_element) != 0) {
+        rc = GlobusGFSErrorGeneric("I can't sort");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Can't sort\n");
+        globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
+        return rc;
     }
 
+    lfs_handle->small_queue_length += 1;
+    if (lfs_handle->small_queue_length != buffer_length(lfs_handle->small_queue_head)) {
+        rc = GlobusGFSErrorGeneric("Dropped list elements");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Can't count list element post (expected: %i, actual: %i)\n",
+                                    lfs_handle->small_queue_length, count);
+        globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
+        return rc;
+    }
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Have %i small queue elements\n",lfs_handle->small_queue_length);
     return rc;
 }
 
@@ -371,90 +140,85 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
 
     globus_result_t rc = GLOBUS_SUCCESS;
 
-    wrote_something=1;
-    globus_size_t accumulated_amount = 0;
     globus_size_t target_amount = lfs_handle->preferred_write_size;
     globus_off_t offset_begin;
     size_t buffer_begin;
-    // Loop through all our buffers; loop again if we write something.
-    while (wrote_something == 1) {
-        wrote_something=0;
-        if (accumulated_amount != 0) {
-            SystemError(lfs_handle, "accumulated_amount should be zero", errno);
-        }
-        // For each of our buffers.
-        int found_head = 0;
-        for (i=0; i<cnt; i++) {
-            // Do checks to see if we're at the front of a train
-            if (!found_head && lfs_handle->used[i] && offsets[i] == lfs_handle->offset) {
-                // globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Found beginning of buffer. Block %i\n", i);
-                offset_begin = lfs_handle->offset;
-                buffer_begin = i;
-                found_head = 1;
-                accumulated_amount = 0;
-            }
-            if (!found_head) {
-                continue;
-            }
-            if (!lfs_handle->used[i] || (offset_begin + accumulated_amount != offsets[i])) {
-                found_head = 0;
-                accumulated_amount = 0;
-                continue;
-            }   
-            /**
-             * So, we would like to dump buffers IF any of:
-             * 1) We are at the end of the list of buffers (i=cnt-1)
-             * 2) lfs_handle->nbytes != lfs_handle>block_size
-             * 3) We have accumulated 10MB of data
-             * 4) next buffer is used AND current_offset + block_size != next_offset
-             */
-            int checkOne = (i == cnt - 1);
-            int checkTwo = (nbytes[i] != lfs_handle->block_size);
-            int checkThree = (accumulated_amount + nbytes[i] >= target_amount);
-            // this check makes no sense if we're at the end of the list
-            int checkFour = ((i != cnt -1) && (lfs_handle->used[i+1]) &&
-                                (offsets[i] + nbytes[i] != offsets[i+1]));
-            if ( checkOne || checkTwo || checkThree || checkFour ) {
-                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "dumping %u to %u: %i %i %i %i\n",
-                                        buffer_begin, i, checkOne, checkTwo,
-                                        checkThree, checkFour);
-                // dump things out immediately
-                globus_size_t tmp_nbytes = accumulated_amount +
-                                            nbytes[i]*sizeof(globus_byte_t);
-                globus_byte_t *tmp_buffer = globus_malloc(tmp_nbytes);
-                int j;
-                globus_byte_t *copy_pointer = tmp_buffer;
-                for (j=buffer_begin;j<=i;++j) {
-                    lfs_handle->used[j] = 0;
-                    memcpy(copy_pointer, lfs_handle->buffer_pointers[j], nbytes[j]);
-                    copy_pointer += nbytes[j];
-                    globus_free(lfs_handle->buffer_pointers[j]);
-                }
-                globus_off_t old_offset = lfs_handle->offset;
-                if ((rc = lfs_dump_buffer_queued(lfs_handle, tmp_buffer, tmp_nbytes, old_offset)) != GLOBUS_SUCCESS) {
-                    return rc;
-                }
-                lfs_handle->offset += tmp_nbytes;
-                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset jumps from %i to %i\n",old_offset, lfs_handle->offset);
-                globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset blocks jumps from %i to %i\n",old_offset/lfs_handle->block_size, lfs_handle->offset/lfs_handle->block_size);
-                // lfs_handle->outstanding -= i - buffer_begin + 1;
-                if (tmp_nbytes > 0) {
-                    wrote_something = 1;
-                }
-                for (j=buffer_begin;j<=i;++j) {
-                    lfs_handle->used[j] = 0;
-                }
-                found_head = 0;
-                accumulated_amount = 0;
-            } else {
-                // We chose to not dump immediately. Maybe the next pass will 
-                // push us over the edge.
-                accumulated_amount += nbytes[i]*sizeof(globus_byte_t);
-            }
-        }
+    lfs_queue_item_t *head, *curr;
+    head = curr = lfs_handle->small_queue_head;
+    if (!head) {
+        return rc;
     }
-    if (accumulated_amount != 0) {
-        SystemError(lfs_handle, "accumulated_amount should be zero", errno);
+    // See how far we can get in a contiguous block. For this, "head" means
+    // "the beginning of the contiguous block" and "curr" means the
+    // current location in the file
+    globus_off_t head_offset, current_offset;
+    head_offset = head->offset;
+    current_offset = curr->offset;
+    globus_size_t current_bytes = 0;
+    if (head_offset != lfs_handle->offset) {
+        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Not at beginning of chain (%i != %i)\n", head_offset/lfs_handle->block_size, lfs_handle->offset/lfs_handle->block_size);
+        return rc;
+    }
+
+    while (curr) {
+        if (current_offset != curr->offset) {
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Unmatched offsets (%i != %i)\n", current_offset/lfs_handle->block_size, curr->offset/lfs_handle->block_size);
+            break;
+        }
+        current_offset += curr->nbytes;
+        current_bytes  += curr->nbytes;
+        if (current_bytes < target_amount) {
+            curr = curr->next;
+            continue;
+        }
+
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Beginning to write small to big\n");
+        // We've got enough bytes to flush out to the background thread
+        globus_byte_t * tmp_buffer = globus_malloc(current_bytes*sizeof(globus_byte_t));
+        if (!tmp_buffer) {
+            rc = GlobusGFSErrorGeneric("Memory allocation error.");
+            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Memory allocation error.");
+            globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
+            return rc;
+        }
+        globus_byte_t * memcpy_ptr = tmp_buffer;
+        lfs_queue_item_t * new_head = curr->next;
+        while (head && (head != new_head)) {
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, 
+            //                        "Small head is now %i (%i)\n",
+            //                        new_head->offset/lfs_handle->block_size,
+            //                        buffer_length(lfs_handle->small_queue_head));
+            memcpy_ptr = tmp_buffer + (head->offset - head_offset);
+            memcpy(memcpy_ptr, head->buffer, head->nbytes);
+            globus_free(head->buffer);
+            // Push the head forward towards curr
+            head = head->next;
+            lfs_handle->small_queue_length -= 1;
+            lfs_handle->free_length += 1;
+            //globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Have %i small queue elements (%i free) (%i actual) (%i free actual)\n",
+            //                            lfs_handle->small_queue_length,
+            //                            lfs_handle->free_length,
+            //                            buffer_length(lfs_handle->small_queue_head),
+            //                            buffer_length(lfs_handle->free_head)
+            //                            );
+        }
+        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, 
+        //                            "Resetting small head offset to %i (%i)\n",
+        //                            new_head->offset/lfs_handle->block_size,
+        //                            buffer_length(new_head));
+
+        // Reset the different lists
+        lfs_handle->free_head = lfs_handle->small_queue_head;
+        lfs_handle->small_queue_head = new_head;
+        curr->next = NULL;
+
+        globus_off_t old_offset = head_offset;
+        if ((rc = lfs_dump_buffer_queued(lfs_handle, tmp_buffer, current_bytes, old_offset)) != GLOBUS_SUCCESS) {
+            return rc;
+        }
+        lfs_handle->offset += current_bytes;
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset jumps from %i to %i\n",old_offset, lfs_handle->offset);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset blocks jumps from %i to %i\n",old_offset/lfs_handle->block_size, lfs_handle->offset/lfs_handle->block_size);
     }
     return rc;
 }
@@ -469,24 +233,48 @@ lfs_dump_buffers_unbatched(lfs_handle_t *lfs_handle) {
     GlobusGFSName(globus_l_gfs_lfs_dump_buffers);
 
     globus_result_t rc = GLOBUS_SUCCESS;
-
+    
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Dumping unbatched\n");
     wrote_something=1;
     // Loop through all our buffers; loop again if we write something.
     while (wrote_something == 1) {
         wrote_something=0;
         // For each of our buffers.
-        for (i=0; i<cnt; i++) {
-            if (lfs_handle->used[i] == 1 && offsets[i] == lfs_handle->offset) {
-                globus_byte_t *tmp_buffer = lfs_handle->buffer_pointers[i];
-                globus_size_t tmp_nbytes = nbytes[i]*sizeof(globus_byte_t);
-                if ((rc = lfs_dump_buffer_immed(lfs_handle, tmp_buffer, tmp_nbytes, lfs_handle->offset)) != GLOBUS_SUCCESS) {
+        lfs_queue_item_t * head = lfs_handle->small_queue_head;
+        lfs_queue_item_t * prev = NULL;
+        while (head) {
+            if (head->offset == lfs_handle->offset) {
+                // keep in mind further down that this function calls
+                // globus_free on the input buffer
+                if ((rc = lfs_dump_buffer_queued(lfs_handle, head->buffer, head->nbytes, lfs_handle->offset)) != GLOBUS_SUCCESS) {
                     return rc;
                 }
-                if (tmp_nbytes > 0) {
+                lfs_handle->offset += head->nbytes;
+                if (head->nbytes > 0) {
                     wrote_something = 1;
                 }
-                lfs_handle->used[i] = 0;
-                lfs_handle->offset += tmp_nbytes;
+                
+
+                // remove this item from the small queue list
+                if (prev) {
+                    prev->next = head->next;
+                    prev = NULL;
+                } else if (head == lfs_handle->small_queue_head) {
+                    lfs_handle->small_queue_head == head->next;
+                    prev = NULL;
+                }
+
+                // add this item to the free list
+                lfs_queue_item_t * next = head->next;
+                head->next = lfs_handle->free_head;
+                lfs_handle->free_head = head;
+                
+                lfs_handle->small_queue_length -= 1;
+                lfs_handle->free_length += 1;
+                head = next;
+            } else {
+                prev = head;
+                head = head->next;
             }
         }
     }
@@ -504,9 +292,9 @@ globus_result_t lfs_dump_buffer_queued(lfs_handle_t *lfs_handle, globus_byte_t *
     }
     lfs_queue_item_t * curr = globus_malloc(sizeof(lfs_queue_item_t));
     if (!curr) {
-            MemoryError(lfs_handle, "Allocating backing queue\n", rc);
-            globus_mutex_unlock(lfs_handle->buffer_mutex);
-            return rc;
+        MemoryError(lfs_handle, "Allocating backing queue\n", rc);
+        globus_mutex_unlock(lfs_handle->buffer_mutex);
+        return rc;
     }
     curr->buffer = buffer;
     curr->nbytes = nbytes;
@@ -519,38 +307,12 @@ globus_result_t lfs_dump_buffer_queued(lfs_handle_t *lfs_handle, globus_byte_t *
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Stalling out enqueued write\n");
         globus_cond_wait(lfs_handle->dequeued_cond, lfs_handle->buffer_mutex);
     }
-    target = lfs_handle->queue_head;
-    if (!lfs_handle->queue_head || (lfs_handle->queue_head->offset > curr->offset)) {
-        curr->next = lfs_handle->queue_head;
-        lfs_handle->queue_head = curr;
-    } else {
-        prev = target;
-        while (1) {
-            if (target->next == NULL) {
-                // tack this at the end
-                prev = target;
-                target = NULL;
-                break;
-            }
-            if (target->offset > curr->offset) {
-                break;
-            }
-            prev = target;
-            target = target->next;
-        }
-        curr->next = target;
-        prev->next = curr;
-    }
-    globus_off_t testoff = lfs_handle->queue_head->offset;
-    target = lfs_handle->queue_head;
-    while (target) {
-        if (testoff > target->offset) {
-            SystemError(lfs_handle, "Offsets out of order\n", rc);
-            globus_mutex_unlock(lfs_handle->buffer_mutex);
-            return -1;
-        }
-        testoff = target->offset;
-        target = target->next;
+
+    if (add_by_offset(&lfs_handle->queue_head, curr)) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Failed to store element in queue\n");
+        globus_cond_broadcast(lfs_handle->queued_cond);
+        globus_mutex_unlock(lfs_handle->buffer_mutex);
+        return -1;
     }
     lfs_handle->queue_length += 1;
     lfs_handle->queued_bytes += nbytes;
@@ -708,27 +470,18 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
     // Checksum after writing to disk.  This way, if a non-transient corruption occurs
     // during writing to Hadoop, we detect it and hopefully fail the file.
 
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum locking %lu (%lu) owner %i\n", offset, lfs_handle->offset_mutex,lfs_handle->offset_mutex->pthread.__data.__owner);
     globus_mutex_lock(lfs_handle->offset_mutex);
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum locked %lu owner %i\n", offset, lfs_handle->offset_mutex->pthread.__data.__owner);
     if (lfs_handle->cksm_types) {
         lfs_handle->blocked_ops += 1;
-        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Preparing to checksum at offset %lu to %lu (current: %lu)\n", offset, offset + bytes_written,lfs_handle->committed_offset);
         while (lfs_handle->committed_offset != offset) {
             globus_abstime_t timer;
             timer.tv_sec = 10;
             timer.tv_nsec = 0;
-            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Waiting to checksum at offset %lu to %lu (current: %lu)\n", offset, offset + bytes_written, lfs_handle->committed_offset);
             globus_cond_wait(lfs_handle->offset_cond,
                                   lfs_handle->offset_mutex);
-
-            //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Waited to checksum at offset %lu to %lu (current: %lu)\n", offset, offset + bytes_written, lfs_handle->committed_offset);
             if (lfs_handle->committed_offset > offset) {
-                // what the hell, man?
                 globus_cond_broadcast(lfs_handle->offset_cond);
-                //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocking2 %lu\n", offset);
                 globus_mutex_unlock(lfs_handle->offset_mutex);
-                //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocked2 %lu\n", offset);
                 globus_free(buffer);
                 set_done(lfs_handle, rc);
                 lfs_handle->blocked_ops -= 1;
@@ -741,12 +494,10 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t *lfs_handle, globus_byte_t *b
         lfs_update_checksums(lfs_handle, buffer, bytes_written);
         globus_cond_broadcast(lfs_handle->offset_cond);
     }
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocking owner %lu\n", offset, lfs_handle->offset_mutex->pthread.__data.__owner);
     if ((rc = globus_mutex_unlock(lfs_handle->offset_mutex)) != GLOBUS_SUCCESS) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Mutex fail %lu\n", rc);
         SystemError(lfs_handle, "Couldn't unlock mutex", rc);
     }
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checksum unlocked %lu\n", offset);
     globus_free(buffer);
     return rc;
 }

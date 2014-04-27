@@ -47,6 +47,7 @@ typedef struct lfs_queue_item_s {
     globus_byte_t * buffer;
     globus_size_t nbytes;
     globus_off_t offset;
+    short buffer_in_file;
     struct lfs_queue_item_s * next;
 } lfs_queue_item_t;
 
@@ -66,9 +67,16 @@ typedef struct globus_l_gfs_lfs_handle_s
     unsigned int                        done;
     globus_result_t                     done_status; // The status of the finished transfer.
     globus_bool_t                       sent_finish; // Whether or not we have sent the client an abort.
+    // I should refactor this. "Queue" in this context is large, FS-friendly
+    // chunks
     globus_bool_t                       queue_open; // Whether or not the queue should be open
     lfs_queue_item_t *                  queue_head;
     unsigned int                        queue_length;
+    // small_queue in this context is small, gridftp/network friendly chunks
+    lfs_queue_item_t *                  free_head;
+    unsigned int                        free_length;
+    lfs_queue_item_t *                  small_queue_head;
+    unsigned int                        small_queue_length;
     globus_result_t                     background_status;
     unsigned int                        starved_ops;
     unsigned int                        blocked_ops;
