@@ -428,7 +428,7 @@ lfs_start(
     GlobusGFSName(lfs_start);
     globus_result_t rc;
     int max_file_buffer_count = 1500;
-    int load_limit = 30;
+    int load_limit = 100;
     int replicas;
     int port;
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Entering lfs_start.\n");
