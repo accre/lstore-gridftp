@@ -217,6 +217,7 @@ lfs_dump_buffers(lfs_handle_t *lfs_handle) {
             return rc;
         }
         lfs_handle->offset += current_bytes;
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Completed writing small to big\n");
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset jumps from %i to %i\n",old_offset, lfs_handle->offset);
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Offset blocks jumps from %i to %i\n",old_offset/lfs_handle->block_size, lfs_handle->offset/lfs_handle->block_size);
     }
@@ -317,9 +318,9 @@ globus_result_t lfs_dump_buffer_queued(lfs_handle_t *lfs_handle, globus_byte_t *
     lfs_handle->queue_length += 1;
     lfs_handle->queued_bytes += nbytes;
     rc = lfs_handle->background_status;
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Enqueueing write: %u Stalled: %u\n",
-                                                            lfs_handle->queue_length,
-                                                            lfs_handle->starved_ops);
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Enqueueing write: %u Stalled: %u\n",
+    //                                                        lfs_handle->queue_length,
+    //                                                        lfs_handle->starved_ops);
     globus_cond_signal(lfs_handle->queued_cond);
     globus_mutex_unlock(lfs_handle->buffer_mutex);
     return rc;
@@ -348,9 +349,9 @@ int lfs_dequeue_buffer(lfs_handle_t *lfs_handle, globus_byte_t **buffer, globus_
     lfs_handle->queued_bytes -= curr->nbytes;
     lfs_handle->queue_length -= 1;
     globus_free(curr);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Dequeueing write: %u Stalled: %u\n",
-                                                    lfs_handle->queue_length,
-                                                    lfs_handle->starved_ops);
+    //globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Dequeueing write: %u Stalled: %u\n",
+    //                                                lfs_handle->queue_length,
+    //                                                lfs_handle->starved_ops);
     globus_cond_signal(lfs_handle->dequeued_cond);
     globus_mutex_unlock(lfs_handle->buffer_mutex);
     return 1;
