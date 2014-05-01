@@ -367,7 +367,7 @@ lfs_handle_write_op(
     
     if (lfs_handle->queued_bytes > (lfs_handle->max_queued_bytes / 2)) {
         STATSD_COUNT("stall_big",1);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Internal queue count too high. Stalling. (%lu > %lu);\n",
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Big buffer count too high. Stalling. (%lu > %lu);\n",
                                     lfs_handle->queued_bytes, lfs_handle->max_queued_bytes/2);
         if (lfs_handle->queued_bytes > (3 * lfs_handle->max_queued_bytes / 4)) {
             sleep(2);
@@ -377,7 +377,7 @@ lfs_handle_write_op(
     
     if (lfs_used_buffer_count(lfs_handle) > lfs_handle->stall_buffer_count) {
         STATSD_COUNT("stall_small",1);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Buffer count too high (%i > %i). Stalling.\n",
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Small buffer count too high (%i > %i). Stalling.\n",
                                     lfs_used_buffer_count(lfs_handle),
                                     lfs_handle->stall_buffer_count);
         sleep(1);
@@ -386,12 +386,14 @@ lfs_handle_write_op(
     // Try to store the buffer into memory, a seperate thread handles consuming
     // this
     if ((rc = lfs_store_buffer(lfs_handle, buffer, offset, nbytes)) != GLOBUS_SUCCESS) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Received a failure in lfs_store_buffer\n");
         goto cleanup;
     }
     
     if (lfs_used_buffer_count(lfs_handle) > lfs_handle->preferred_write_size / 
                                                 lfs_handle->block_size) {
         if ((rc = lfs_dump_buffers(lfs_handle)) != GLOBUS_SUCCESS) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Received a failure in lfs_dump_buffers\n");
             goto cleanup;
         }
     }
@@ -415,11 +417,6 @@ cleanup:
         set_done(lfs_handle, rc);
     }
     
-    // deallocate on the other side of the buffer thread
-    //if (buffer) {
-    //    globus_free(buffer);
-    //}
-
     lfs_handle->outstanding--;
     if (!is_done(lfs_handle)) {
         // Request more transfers.
@@ -463,11 +460,11 @@ lfs_dispatch_write(
     globus_result_t                     rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_dispatch_write);
-/*
+
+    // need to figure out what exactly is meant by "is_done".
     if (is_done(lfs_handle)) {
         return;
     }
-*/
     //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
     //                                             &lfs_handle->optimal_count);
     //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
