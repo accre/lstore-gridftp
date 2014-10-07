@@ -72,6 +72,7 @@ typedef struct globus_l_gfs_lfs_handle_s
     globus_bool_t                       queue_open; // Whether or not the queue should be open
     lfs_queue_item_t *                  queue_head;
     unsigned int                        queue_length;
+    globus_off_t                        queue_offset;
     // small_queue in this context is small, gridftp/network friendly chunks
     lfs_queue_item_t *                  free_head;
     unsigned int                        free_length;

@@ -1,5 +1,6 @@
 
 #include "gridftp_lfs.h"
+#include <time.h>
 #include <syslog.h>
 //#include <stat.h>
 // Forward declarations of local functions
@@ -64,9 +65,11 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
         globus_free(lfs_handle->buffer);
     if (lfs_handle->used)
         globus_free(lfs_handle->used);
-    if (lfs_handle->log_filename)
+    if (lfs_handle->log_filename) {
         unlink(lfs_handle->log_filename);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "receive %d blocks of size %d bytes\n",
+        globus_free(lfs_handle->log_filename);
+    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "transmit %d blocks of size %d bytes\n",
         lfs_handle->io_count, lfs_handle->io_block_size);
 
     set_close_done(lfs_handle, rc);
@@ -155,7 +158,7 @@ lfs_send(
         memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
         lfs_handle->fd->direct_io = 0;
         lfs_handle->fd->flags = O_RDONLY;
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from LFS: %s", lfs_handle->pathname_munged);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from LFS: %s\n", lfs_handle->pathname_munged);
         retval = lfs_open_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs);
         if (retval != 0) {
             if (0) { //errno == EINTERNAL) {
@@ -171,7 +174,7 @@ lfs_send(
             goto cleanup;
         }
     } else {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from filesystem: %s", lfs_handle->pathname);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from filesystem: %s\n", lfs_handle->pathname);
         lfs_handle->fd_posix = open(lfs_handle->pathname, O_RDONLY);
     }
 
@@ -184,7 +187,7 @@ lfs_send(
 cleanup:
 
     if (rc != GLOBUS_SUCCESS) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to initialize read setup");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to initialize read setup\n");
         set_done(lfs_handle, rc);
         globus_gridftp_server_finished_transfer(op, rc);
     }
@@ -273,7 +276,7 @@ cleanup:
     if (!is_done(lfs_handle)) {
         lfs_dispatch_read(lfs_handle);
     } else if (lfs_handle->outstanding == 0) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Transfer has finished!\n");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Transfer has finished!\n");
         rc = close_and_clean(lfs_handle, rc);
         globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
 
@@ -332,7 +335,9 @@ lfs_perform_read_cb(
 
     remaining_read = read_length;
     cur_offset = offset;
-    while (remaining_read != 0) {
+    int current_retries = 0;
+    int max_retries = 10;
+    while ((remaining_read != 0) && (current_retries <= max_retries)) {
         STATSD_TIMER_START(read_loop_timer);
         if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
             nbytes = lfs_read(lfs_handle->pathname, cur_buffer_pos, remaining_read, cur_offset, lfs_handle->fd);
@@ -353,7 +358,7 @@ lfs_perform_read_cb(
             STATSD_TIMER_END("read_time", read_loop_timer);
             STATSD_COUNT("lfs_bytes_read",nbytes);
         } else {
-            nbytes = read(lfs_handle->fd_posix, cur_buffer_pos, remaining_read);
+            nbytes = pread(lfs_handle->fd_posix, cur_buffer_pos, remaining_read, cur_offset);
             if (nbytes == 0) {    /* eof */
                 // No error
                 globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "lfs_perform_read_cb EOF.\n");
@@ -362,18 +367,33 @@ lfs_perform_read_cb(
                 globus_mutex_unlock(lfs_handle->mutex);
                 break;
             } else if (nbytes < 0) {
-                SystemError(lfs_handle, "reading from posix", rc)
-                goto cleanup;
+                STATSD_COUNT("posix_read_failure",1);
+                if (current_retries >= max_retries) {
+                    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to read from POSIX. Errno: %i Retry: Terminal\n",errno);
+                    SystemError(lfs_handle, "reading from posix", rc)
+                    goto cleanup;
+                } else {
+                    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to read from POSIX. Errno: %i Retry: %i\n",errno, current_retries);
+                    sleep(15);
+                    int newfd = open(lfs_handle->pathname, O_RDONLY);
+                    if (newfd != -1) {
+                        close(lfs_handle->fd_posix);
+                        lfs_handle->fd_posix = newfd;
+                    }
+                    current_retries++;
+                    nbytes = 0;
+                }
+            } else {
+                STATSD_TIMER_END("posix_read_time", read_loop_timer);
+                STATSD_COUNT("posix_bytes_read",nbytes);
             }
-            STATSD_TIMER_END("posix_read_time", read_loop_timer);
-            STATSD_COUNT("posix_bytes_read",nbytes);
         }
         remaining_read -= nbytes;
         cur_buffer_pos += nbytes;
         cur_offset += nbytes;
     }
 
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read length: %d; remaining: %d\n", read_length, remaining_read);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Read length: %d; remaining: %d retries: %i\n", read_length, remaining_read, current_retries);
     if (read_length != remaining_read) {
         // If we read anything at all, write it out to the client.
         // When the write to the network is finished, lfs_finish_read_cb will be called.
@@ -419,9 +439,13 @@ lfs_dispatch_read(
 
     GlobusGFSName(lfs_dispatch_read);
 
-    //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
-    //                                              &lfs_handle->optimal_count);
-    lfs_handle->optimal_count = (lfs_handle->preferred_write_size * 4) / lfs_handle->block_size;
+    if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
+        globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
+                                                  &lfs_handle->optimal_count);
+    } else {
+        lfs_handle->optimal_count = 1;
+    }
+    //lfs_handle->optimal_count = (lfs_handle->preferred_write_size * 4) / lfs_handle->block_size;
     // Verify we have sufficient buffer space.
     if ((rc = allocate_buffers(lfs_handle, lfs_handle->optimal_count)) != GLOBUS_SUCCESS) {
         goto cleanup;

@@ -516,10 +516,10 @@ lfs_start(
     strncpy(lfs_handle->username, session_info->username, strlength);
     // TODO update this to pull from environment
     lfs_handle->preferred_write_size = 1024 * 1024 * 10; // what to prefer to send to LFS
-    lfs_handle->write_size_buffers = 2; // how many of these chunks should we keep around
-    lfs_handle->stall_buffer_count = 70; // @ 256kB per buffer, this is 30MB
+    lfs_handle->write_size_buffers = 3; // how many of these chunks should we keep around
+    lfs_handle->stall_buffer_count = 4000; // @ 256kB per buffer, this is 30MB
     lfs_handle->concurrent_writes = 5;
-    lfs_handle->max_queued_bytes = 110 * 1024 * 1024; // how much to store on the backend (100MB)
+    lfs_handle->max_queued_bytes = 100 * 1024 * 1024; // how much to store on the backend (100MB)
     // Pull configuration from environment.
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
@@ -599,17 +599,26 @@ lfs_start(
     }
 
     // fire up the mount point
+
     char * argv[] = {
-        "gridftp-dummy-plugin",
-        "-o",
-        "big_writes,use_ino,kernel_cache",
-        "-c",
-        lfs_handle->lfs_config,
-        "-d",
-        "1",
-        "-log",
-        lfs_handle->log_filename
-    };
+            "gridftp-dummy-plugin",
+            "-o",
+            "big_writes,use_ino,kernel_cache",
+            "-c",
+            lfs_handle->lfs_config,
+            "-d",
+            "1",
+            "-log",
+            lfs_handle->log_filename
+        };
+
+
+    char * lfs_debug_level = getenv("GRIDFTP_LFS_DEBUG_LEVEL");
+    if (lfs_debug_level) {
+        argv[6] = strdup(lfs_debug_level);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,"Setting lfs logging to %s\n", argv[6]);
+    }
+
     struct stat dummy;
     if (stat(lfs_handle->lfs_config,& dummy)) {
         SystemError(lfs_handle, "Config file doesn't exist", lfs_handle->lfs_config);
@@ -664,7 +673,7 @@ lfs_start(
         token = strsep(&buf_ptr, " ");
         load = strtod(token, NULL);
         globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Detected system load %.2f.\n", load);
-        if ((load >= load_limit) && (load < 1000)) {
+        if ((load >= load_limit) && (load < 4000)) {
             globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Preventing gridftp transfer startup due to system load of %.2f.\n", load);
             sleep(5);
         } else {
