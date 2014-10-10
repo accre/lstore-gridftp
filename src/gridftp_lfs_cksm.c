@@ -96,81 +96,108 @@ static void human_readable_adler32(unsigned char *adler32_human, uint32_t adler3
  *  Initialize all the checksum calculations
  */
 void lfs_initialize_checksums(lfs_handle_t *lfs_handle) {
-
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CKSUM) {
-        lfs_handle->cksum = 0;
-    }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CRC32) {
-        lfs_handle->crc32 = crc32(0, NULL, 0);
-    }
+    // prealloc space to store 10GB of checksums
+    lfs_handle->checksum_length = 10 * 1024 * 1024 / lfs_handle->block_size * 1024;
+    lfs_handle->checksum_offsets = globus_malloc(lfs_handle->checksum_length * sizeof(globus_off_t));
+    lfs_handle->checksum_lens = globus_malloc(lfs_handle->checksum_length * sizeof(globus_size_t));
+    lfs_handle->checksum_index = 0;
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
-        lfs_handle->adler32 = adler32(0, NULL, 0);
+        lfs_handle->adler32 = globus_malloc(lfs_handle->checksum_length * sizeof(unsigned long));
     }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_MD5) {
-        MD5_Init(&lfs_handle->md5);
-    }
-
 }
 
 /*
  *  Update all the checksums requested
  */
-void lfs_update_checksums(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globus_size_t nbytes) {
-
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CKSUM) {
-        // Checksum algorithm from POSIX standard.
-        globus_size_t bc = nbytes;
-        unsigned char * cp = buffer;
-        uint32_t crc = lfs_handle->cksum;
-        while (bc--) {
-            crc = (crc << 8) ^ crctab[((crc >> 24) ^ *cp++) & 0xFF];
-        }
-        lfs_handle->cksum = crc;
-    }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CRC32) {
-        lfs_handle->crc32 = crc32(lfs_handle->crc32, buffer, nbytes);
-    }
+void lfs_update_checksums(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globus_size_t nbytes, globus_off_t offset) {
+    uint32_t adler32_tmp;
+    //globus_size_t nbytes = buffer.buf.total_bytes;
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
-        lfs_handle->adler32 = adler32(lfs_handle->adler32, buffer, nbytes);
-    }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_MD5) {
-        MD5_Update(&lfs_handle->md5, buffer, nbytes);
+        adler32_tmp = adler32(0L, NULL, 0);
+        adler32_tmp = adler32(adler32_tmp, buffer, nbytes);
     }
 
+    globus_mutex_lock(lfs_handle->checksum_mutex);
+    if (lfs_handle->checksum_index == lfs_handle->checksum_length) {
+        lfs_handle->checksum_length *= 1.5;
+        lfs_handle->checksum_offsets = globus_realloc(lfs_handle->checksum_offsets,
+                                         lfs_handle->checksum_length * sizeof(globus_off_t));
+        lfs_handle->checksum_lens = globus_realloc(lfs_handle->checksum_lens,
+                                                lfs_handle->checksum_length * sizeof(globus_size_t));
+        if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
+            lfs_handle->adler32 = globus_realloc(lfs_handle->adler32,
+                                                    lfs_handle->checksum_length * sizeof(unsigned long));
+        }
+    }
+    lfs_handle->checksum_lens[lfs_handle->checksum_index] = nbytes;
+    lfs_handle->checksum_offsets[lfs_handle->checksum_index] = offset;
+    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
+        lfs_handle->adler32[lfs_handle->checksum_index] = adler32_tmp;
+    }
+    lfs_handle->checksum_index += 1;
+    globus_mutex_unlock(lfs_handle->checksum_mutex);
 }
+#define BASE 65521
+#define MOD(a) a %= BASE
+#define MOD28(a) a %= BASE
+#define MOD63(a) a %= BASE
+// FIX THIS
+unsigned long adler32_combine_melo_hack(unsigned long adler1,unsigned long adler2, globus_off_t len2)
+{
+    unsigned long sum1;
+    unsigned long sum2;
+    unsigned rem;
 
+    /* for negative len, return invalid adler32 as a clue for debugging */
+    if (len2 < 0)
+        return 0xffffffffUL;
+
+    /* the derivation of this formula is left as an exercise for the reader */
+    MOD63(len2);                /* assumes len2 >= 0 */
+    rem = (unsigned)len2;
+    sum1 = adler1 & 0xffff;
+    sum2 = rem * sum1;
+    MOD(sum2);
+    sum1 += (adler2 & 0xffff) + BASE - 1;
+    sum2 += ((adler1 >> 16) & 0xffff) + ((adler2 >> 16) & 0xffff) + BASE - rem;
+    if (sum1 >= BASE) sum1 -= BASE;
+    if (sum1 >= BASE) sum1 -= BASE;
+    if (sum2 >= (BASE << 1)) sum2 -= (BASE << 1);
+    if (sum2 >= BASE) sum2 -= BASE;
+    return sum1 | (sum2 << 16);
+}
 /*
  *  Finish all the checksum calculations
  */
 void lfs_finalize_checksums(lfs_handle_t *lfs_handle) {
-
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CKSUM) {
-        globus_off_t length;
-        uint32_t crc = lfs_handle->cksum;
-        for (length = lfs_handle->offset; length; length >>= 8) {
-            crc = (crc << 8) ^ crctab[((crc >> 24) ^ length) & 0xFF];
-        }
-        crc = ~crc & 0xFFFFFFFF;
-        lfs_handle->cksum = crc;
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-            "Checksum CKSUM: %u\n", lfs_handle->cksum);
-    }
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
+        globus_off_t pos = 0;
+        int keep_going = 1;
+        uint32_t running_adler32;
+        for (unsigned int i = 0; i < lfs_handle->checksum_index; ++i) {
+            if (lfs_handle->checksum_offsets[i] == 0) {
+                running_adler32 = lfs_handle->adler32[i];
+                pos = lfs_handle->checksum_lens[i];
+                break;
+            }
+        }
+        while (keep_going) {
+            unsigned int found_this_pass = 0;
+            for (unsigned int i = 0; i < lfs_handle->checksum_index; ++i) {
+                if (pos == lfs_handle->checksum_offsets[i]) {
+                    running_adler32 = adler32_combine_melo_hack(running_adler32, lfs_handle->adler32[i], lfs_handle->checksum_lens[i]);
+                    found_this_pass = 1;
+                    pos += lfs_handle->checksum_lens[i];
+                }
+            }
+            if (!found_this_pass) {
+                keep_going = 0;
+            }
+        }
+        lfs_handle->adler32 = running_adler32;
         human_readable_adler32(lfs_handle->adler32_human, lfs_handle->adler32);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-            "Checksum ADLER32: %s\n", lfs_handle->adler32_human);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Checksum ADLER32: %s %lu\n", lfs_handle->adler32_human, running_adler32);
     }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_MD5) {
-        MD5_Final(lfs_handle->md5_output, &lfs_handle->md5);
-        human_readable_md5(lfs_handle->md5_output_human, lfs_handle->md5_output);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-            "Checksum MD5: %s\n", lfs_handle->md5_output_human);
-    }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CRC32) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-            "Checksum CRC32: %u\n", lfs_handle->crc32);
-    }
-
 }
 
 #define OUTPUT_BUFFER_SIZE 256
@@ -179,9 +206,8 @@ void lfs_finalize_checksums(lfs_handle_t *lfs_handle) {
  *  Save checksums.
  */
 globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
-    globus_result_t rc = GLOBUS_SUCCESS;
-
     GlobusGFSName(lfs_save_checksum);
+    globus_result_t rc = GLOBUS_SUCCESS;
 
     if (!lfs_handle->cksm_types || !lfs_handle->cksm_root) {
         return rc;
@@ -198,26 +224,10 @@ globus_result_t lfs_save_checksum(lfs_handle_t *lfs_handle) {
 
     char buffer[OUTPUT_BUFFER_SIZE];
     unsigned short length = 0;
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CKSUM) {
-        snprintf(buffer, OUTPUT_BUFFER_SIZE, "%u", lfs_handle->cksum);
-        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.cksum", buffer, strlen(buffer), 0,lfs_handle->fs);
-        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
-    }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_CRC32) {
-        snprintf(buffer, OUTPUT_BUFFER_SIZE, "%u", lfs_handle->crc32);
-        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.crc32", buffer, strlen(buffer), 0,lfs_handle->fs);
-        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
-    }
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
         retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.adler32", lfs_handle->adler32_human, strlen(lfs_handle->adler32_human), 0, lfs_handle->fs);
         if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
     }
-    if (lfs_handle->cksm_types & LFS_CKSM_TYPE_MD5) {
-        lfs_handle->md5_output_human[MD5_DIGEST_LENGTH*2] = '\0';
-        retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.md5", lfs_handle->md5_output_human, strlen(lfs_handle->md5_output_human), 0, lfs_handle->fs);
-        if (retval < 0) { SystemError(lfs_handle, "Unable to write attribute", retval); return retval; }
-    }
-
     if (rc == GLOBUS_SUCCESS) {
         const char okay_flag [] = "okay";
         retval = lfs_setxattr_real(lfs_handle->pathname_munged, "user.gridftp.success", okay_flag, strlen(okay_flag), 0, lfs_handle->fs);
@@ -257,15 +267,6 @@ globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname
 void
 lfs_parse_checksum_types(lfs_handle_t * lfs_handle, const char * types) {
     lfs_handle->cksm_types = 0;
-    if (strstr(types, "MD5") != NULL) {
-        lfs_handle->cksm_types |= LFS_CKSM_TYPE_MD5;
-    }
-    if (strstr(types, "CKSUM")) {
-        lfs_handle->cksm_types |= LFS_CKSM_TYPE_CKSUM;
-    }
-    if (strstr(types, "CRC32")) {
-        lfs_handle->cksm_types |= LFS_CKSM_TYPE_CRC32;
-    }
     if (strstr(types, "ADLER32")) {
         lfs_handle->cksm_types |= LFS_CKSM_TYPE_ADLER32;
     }

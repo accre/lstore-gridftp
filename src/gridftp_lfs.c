@@ -455,6 +455,7 @@ lfs_start(
     lfs_handle->mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
     lfs_handle->offset_mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
     lfs_handle->buffer_mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
+    lfs_handle->checksum_mutex = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
     lfs_handle->offset_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
     lfs_handle->queued_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
     lfs_handle->dequeued_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
@@ -470,7 +471,7 @@ lfs_start(
         return;
     }
 
-    if (globus_mutex_init(lfs_handle->offset_mutex, GLOBUS_NULL)) {
+    if (globus_mutex_init(lfs_handle->checksum_mutex, GLOBUS_NULL)) {
         SystemError(lfs_handle, "Unable to initialize mutex", rc);
         globus_gridftp_server_operation_finished(op, rc, &finished_info);
         return;
@@ -515,11 +516,11 @@ lfs_start(
     }
     strncpy(lfs_handle->username, session_info->username, strlength);
     // TODO update this to pull from environment
-    lfs_handle->preferred_write_size = 1024 * 1024 * 10; // what to prefer to send to LFS
-    lfs_handle->write_size_buffers = 3; // how many of these chunks should we keep around
+    lfs_handle->preferred_write_size = 8 * 1024 * 1024; // what to prefer to send to LFS (8MB)
+    lfs_handle->write_size_buffers = 8; // how many of these chunks should we keep around (64MB)
     lfs_handle->stall_buffer_count = 4000; // @ 256kB per buffer, this is 30MB
     lfs_handle->concurrent_writes = 5;
-    lfs_handle->max_queued_bytes = 100 * 1024 * 1024; // how much to store on the backend (100MB)
+    lfs_handle->max_queued_bytes = lfs_handle->preferred_write_size *  lfs_handle->write_size_buffers; // how much to store on the backend (100MB)
     // Pull configuration from environment.
     // TODO: Update this for lfs-specific options
     lfs_handle->replicas = 3;
@@ -699,7 +700,7 @@ lfs_start(
             "Checksum algorithms in use: %s.\n", checksums_char);
         lfs_parse_checksum_types(lfs_handle, checksums_char);
     } else {
-        lfs_handle->cksm_types =  LFS_CKSM_TYPE_ADLER32 | LFS_CKSM_TYPE_CKSUM;
+        lfs_handle->cksm_types =  LFS_CKSM_TYPE_ADLER32;
     }
     lfs_handle->tmp_file_pattern = (char *)NULL;
 
@@ -723,7 +724,7 @@ lfs_destroy_gridftp(
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
     STATSD_COUNT("destroy",1);
     //printf("Destroying gridftp\n");
-    if (lfs_handle) {
+    if (0 && lfs_handle) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroying the LFS connection.\n");
         //printf("The handle is %p\n", (void*)lfs_handle);
         if (lfs_handle->fs) {
@@ -742,9 +743,9 @@ lfs_destroy_gridftp(
             globus_mutex_destroy(lfs_handle->mutex);
             globus_free(lfs_handle->mutex);
         }
-        if (lfs_handle->offset_mutex) {
-            globus_mutex_destroy(lfs_handle->offset_mutex);
-            globus_free(lfs_handle->offset_mutex);
+        if (lfs_handle->checksum_mutex) {
+            globus_mutex_destroy(lfs_handle->checksum_mutex);
+            globus_free(lfs_handle->checksum_mutex);
         }
         if (lfs_handle->offset_cond) {
             globus_cond_destroy(lfs_handle->offset_cond);
@@ -758,10 +759,11 @@ lfs_destroy_gridftp(
             globus_cond_destroy(lfs_handle->dequeued_cond);
             globus_free(lfs_handle->dequeued_cond);
         }
-        if (lfs_handle->buffer_mutex) {
-            globus_mutex_destroy(lfs_handle->buffer_mutex);
-            globus_free(lfs_handle->buffer_mutex);
-        }
+        // Figure this one out...segfaults on close, claiming the mutex is locked
+        //if (lfs_handle->buffer_mutex) {
+        //    globus_mutex_destroy(lfs_handle->buffer_mutex);
+        //    globus_free(lfs_handle->buffer_mutex);
+        //}
         globus_free(lfs_handle);
     }
     closelog();

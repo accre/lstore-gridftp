@@ -7,17 +7,17 @@
 // Forward declarations of local functions
 static void
 lfs_handle_write_op(
-    globus_gfs_operation_t              op,
-    globus_result_t                     result,
-    globus_byte_t *                     buffer,
-    globus_size_t                       nbytes,
-    globus_off_t                        offset,
-    globus_bool_t                       eof,
-    void *                              user_arg);
+        globus_gfs_operation_t              op,
+        globus_result_t                     result,
+        globus_byte_t *                     buffer,
+        globus_size_t                       nbytes,
+        globus_off_t                        offset,
+        globus_bool_t                       eof,
+        void *                              user_arg);
 
 static void
 lfs_dispatch_write(
-    globus_l_gfs_lfs_handle_t *      lfs_handle);
+        globus_l_gfs_lfs_handle_t *      lfs_handle);
 
 // Taken from globus_gridftp_server_file.c
 // Assume md5_human is length MD5_DIGEST_LENGTH*2+1
@@ -74,7 +74,7 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     }
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "receive %d blocks of size %d bytes\n",
-        lfs_handle->io_count, lfs_handle->io_block_size);
+            lfs_handle->io_count, lfs_handle->io_block_size);
 
     unsigned char final_cksm_human[2*MD5_DIGEST_LENGTH+1];
 
@@ -141,22 +141,13 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
     lfs_handle->done = GLOBUS_FALSE;
     lfs_handle->done_status = GLOBUS_SUCCESS;
     globus_gridftp_server_get_block_size(lfs_handle->op, &lfs_handle->block_size);
-    
-    // Since we have the block size, we can compute the min buffer count
-    lfs_handle->min_buffer_count = (lfs_handle->preferred_write_size * lfs_handle->write_size_buffers) / lfs_handle->block_size + 1;
 
-    //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
-    //                                              &lfs_handle->optimal_count);
-    // the number of in-flight blocks (I think)
-    //lfs_handle->optimal_count = (lfs_handle->preferred_write_size * 
-    //                                (lfs_handle->write_size_buffers - 1) )/ lfs_handle->block_size;
+    // Getting things set up.
     lfs_handle->optimal_count = lfs_handle->preferred_write_size / lfs_handle->block_size * 2;
-    lfs_handle->buffer_count = lfs_handle->min_buffer_count;
+    lfs_handle->buffer_count = 0;
     lfs_handle->queued_bytes = 0;
     lfs_handle->queue_offset = 0;
-    // need some help debugging because blah
-    lfs_handle->used = globus_malloc(sizeof(short)* 30 * 1024 * 1024 * 1024 /lfs_handle->block_size + 1);
-    memset(lfs_handle->used, 0, sizeof(short)*30 * 1024 * 1024 * 1024 /lfs_handle->block_size + 1);
+    lfs_handle->buffer_head = (lfs_buffer_t *) NULL;
     return GLOBUS_SUCCESS;
 }
 
@@ -170,9 +161,9 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle) {
  ************************************************************************/
 void
 lfs_recv(
-    globus_gfs_operation_t              op,
-    globus_gfs_transfer_info_t *        transfer_info,
-    void *                              user_arg)
+        globus_gfs_operation_t              op,
+        globus_gfs_transfer_info_t *        transfer_info,
+        void *                              user_arg)
 {
     globus_l_gfs_lfs_handle_t *        lfs_handle;
     globus_result_t                     rc = GLOBUS_SUCCESS;
@@ -182,7 +173,6 @@ lfs_recv(
 
     lfs_handle = (lfs_handle_t *) user_arg;
     globus_mutex_lock(lfs_handle->mutex);
-
     lfs_handle->op = op;
     char * PathName=transfer_info->pathname;
     lfs_handle->pathname = PathName;
@@ -217,7 +207,7 @@ lfs_recv(
     lfs_initialize_checksums(lfs_handle);
     if ((rc = start_writers(lfs_handle)) != GLOBUS_SUCCESS) goto cleanup;
 
-	globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Open file %s.\n",
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Open file %s.\n",
             lfs_handle->pathname);
     int retval;
     if (is_lfs_path(lfs_handle, PathName)) {
@@ -242,25 +232,30 @@ lfs_recv(
         if (lfs_handle->fd == NULL)
         {
             MemoryError(lfs_handle, "Memory allocation error.", rc);
-            return rc;
+            goto cleanup;;
         }
         memset(lfs_handle->fd, 0, sizeof(struct fuse_file_info));
         lfs_handle->fd->direct_io = 0;
         lfs_handle->fd->flags = O_WRONLY;
         retval = lfs_open_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs);
-        if (retval != 0)
-        {
+        if (retval != 0) {
             if (0) { //errno == EINTERNAL) {
                 SystemError(lfs_handle,
-                    "opening file due to an internal LFS error; "
-                    "could be a misconfiguration or bad installation at the site.",
-                    rc);
+                        "opening file due to an internal LFS error; "
+                        "could be a misconfiguration or bad installation at the site.",
+                        rc);
             } else if (errno == EACCES) {
                 SystemError(lfs_handle, "opening file; permission error in LFS.", rc);
             } else {
                 SystemError(lfs_handle, "opening file; failed to open file due to unknown error in LFS.", rc);
             }
             goto cleanup;
+        }
+        if (transfer_info->alloc_size > 0) {
+            // hopefully this is the size we want to have the file be later
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Extending to %i bytes via client request\n", transfer_info->alloc_size);
+            lfs_truncate_fd_temp_melo(lfs_handle->fs, lfs_handle->fd, transfer_info->alloc_size);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, " ... complete\n", transfer_info->alloc_size);
         }
     } else {
         retval = open(PathName,  O_WRONLY | O_CREAT );
@@ -272,14 +267,16 @@ lfs_recv(
         }
     }
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-        "Successfully opened file %s for user %s.\n", lfs_handle->pathname,
-         lfs_handle->username);
+            "Successfully opened file %s for user %s.\n", lfs_handle->pathname,
+            lfs_handle->username);
 
     globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
     lfs_dispatch_write(lfs_handle);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning to read file.\n");
 
 cleanup:
     if (rc != GLOBUS_SUCCESS) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Aborted read before transfer began\n");
         stop_writers(lfs_handle);
         set_done(lfs_handle, rc);
         if (!lfs_handle->sent_finish) {
@@ -304,13 +301,13 @@ int block_count = 0;
 static
 void
 lfs_handle_write_op(
-    globus_gfs_operation_t              op,
-    globus_result_t                     result,
-    globus_byte_t *                     buffer,
-    globus_size_t                       nbytes,
-    globus_off_t                        offset,
-    globus_bool_t                       eof,
-    void *                              user_arg)
+        globus_gfs_operation_t              op,
+        globus_result_t                     result,
+        globus_byte_t *                     buffer,
+        globus_size_t                       nbytes,
+        globus_off_t                        offset,
+        globus_bool_t                       eof,
+        void *                              user_arg)
 {
     globus_result_t                     rc = GLOBUS_SUCCESS;
     globus_l_gfs_lfs_handle_t *        lfs_handle;
@@ -319,9 +316,10 @@ lfs_handle_write_op(
     lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
 
     globus_mutex_lock(lfs_handle->mutex);
-    lfs_handle->used[offset/lfs_handle->block_size] = 3;
+    //lfs_handle->used[offset/lfs_handle->block_size] = 3;
     globus_gridftp_server_update_bytes_written(op, offset, nbytes);
-    
+    globus_off_t new_size = offset + nbytes + 1;
+    //lfs_handle->largest_size = (new_size > lfs_handle->largest_size) ? new_size : lfs_handle->largest_size;
 #ifdef FAKE_ERROR
     block_count ++;
     if (block_count == 30) {
@@ -338,6 +336,7 @@ lfs_handle_write_op(
     }
 
     if (result != GLOBUS_SUCCESS) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Received a failure receiving buffers %lu\n", buffer);
         rc = result;
         goto cleanup;
     } else if (eof) {
@@ -351,98 +350,40 @@ lfs_handle_write_op(
         goto cleanup;
     }
     int should_flush = 0;
-    if (lfs_handle->queued_bytes > (lfs_handle->max_queued_bytes / 2)) {
+    globus_mutex_lock(lfs_handle->buffer_mutex);
+    globus_size_t total_blocks = count_total_blocks(lfs_handle);
+    globus_size_t free_blocks = count_blocks(lfs_handle, LFS_BUFFER_FREE);
+    if ((total_blocks - free_blocks) > (lfs_handle->max_queued_bytes / lfs_handle->block_size)) {
         STATSD_COUNT("stall_big",1);
-        if (lfs_handle->queue_head) {
-            if ((lfs_handle->queue_offset - lfs_handle->queue_head->offset) % lfs_handle->preferred_write_size) {
-                // somehow we have an odd-sized block. write it out
-
-                globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Dumping unbatched because we have an odd-sized queue length %i %i\n",
-                                            lfs_handle->queue_offset - lfs_handle->queue_head->offset,
-                                            (lfs_handle->queue_offset - lfs_handle->queue_head->offset) % lfs_handle->preferred_write_size); 
-                // lfs_dump_buffers_unbatched(lfs_handle);
-            } else if (lfs_handle->queue_offset % lfs_handle->preferred_write_size) {
-                // got a buffer in a weird position
-                globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Dumping unbatched because we have our buffer in a strange position\n");
-                //lfs_dump_buffers_unbatched(lfs_handle);
-            }
-            globus_mutex_lock(lfs_handle->buffer_mutex);
-            if (lfs_handle->small_queue_head) {
-                globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, 
-                                    "Big stall. (%lu > %lu) b_offset: %u b_head: %u (b_offset - b_head): %i s_offset: %u s_head: %u workers idle: %i\n",
-                                    lfs_handle->queued_bytes/lfs_handle->block_size,
-                                    lfs_handle->max_queued_bytes/2/lfs_handle->block_size,
-                                    lfs_handle->queue_head->offset/lfs_handle->block_size, 
-                                    lfs_handle->queue_offset/lfs_handle->block_size,
-                                    (lfs_handle->queue_offset/lfs_handle->block_size - lfs_handle->queue_head->offset/lfs_handle->block_size),
-                                    lfs_handle->offset/lfs_handle->block_size,
-                                    lfs_handle->small_queue_head->offset/lfs_handle->block_size,
-                                    lfs_handle->starved_ops
-                                    );
-            } else {
-                    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, 
-                                    "Big stall. (%lu > %lu) b_offset: %u b_head: %u s_offset: %u s_head: NONE\n",
-                                    lfs_handle->queued_bytes/lfs_handle->block_size,
-                                    lfs_handle->max_queued_bytes/2/lfs_handle->block_size,
-                                    lfs_handle->queue_head->offset/lfs_handle->block_size, 
-                                    lfs_handle->queue_offset/lfs_handle->block_size,
-                                    lfs_handle->offset/lfs_handle->block_size
-                                    );
-            }
-            globus_cond_broadcast(lfs_handle->queued_cond);
-            globus_mutex_unlock(lfs_handle->buffer_mutex);
-        } else {
-             globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Big buffer count too high. Stalling. (%lu > %lu);\n",
-                                    lfs_handle->queued_bytes/lfs_handle->block_size, lfs_handle->max_queued_bytes/2/lfs_handle->block_size);
-        }
-        if (lfs_handle->queued_bytes > (3 * lfs_handle->max_queued_bytes / 4)) {
-            sleep(2);
-        }
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Big buffer count too high. Stalling. (%lu > %lu);\n",
+                total_blocks - free_blocks,
+                lfs_handle->max_queued_bytes / lfs_handle->block_size);
+        globus_mutex_unlock(lfs_handle->buffer_mutex);
         sleep(1);
+        globus_mutex_lock(lfs_handle->buffer_mutex);
         should_flush = 1;
     }
-    
-    if ((lfs_used_buffer_count(lfs_handle) > lfs_handle->stall_buffer_count) &&
-        ((offset/lfs_handle->block_size % 20) == 0)){
-        STATSD_COUNT("stall_small",1);
-        //lfs_dump_buffers_unbatched(lfs_handle);
-        if (lfs_handle->small_queue_head) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Small buffer count too high (%i > %i) offset:%i head: %i. Stalling.\n",
-                                        lfs_used_buffer_count(lfs_handle),
-                                        lfs_handle->stall_buffer_count,
-                                        lfs_handle->offset/lfs_handle->block_size,
-                                        lfs_handle->small_queue_head->offset/lfs_handle->block_size);
-        } else {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Small buffer count too high (%i > %i). Stalling.\n",
-                                        lfs_used_buffer_count(lfs_handle),
-                                        lfs_handle->stall_buffer_count);
-        }
-        //sleep(1);
-        should_flush = 1;
-    }
-    
-    // Try to store the buffer into memory, a seperate thread handles consuming
-    // this
-    if ((rc = lfs_store_buffer(lfs_handle, buffer, offset, nbytes)) != GLOBUS_SUCCESS) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Received a failure in lfs_store_buffer\n");
+    if ((rc = lfs_mark_buffer_ready(lfs_handle, buffer, offset, nbytes)) != GLOBUS_SUCCESS) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Received a failure in lfs_mark_buffer_ready\n");
+        globus_mutex_unlock(lfs_handle->buffer_mutex);
         goto cleanup;
     }
-    
     if (should_flush ||
-            (lfs_used_buffer_count(lfs_handle) > lfs_handle->preferred_write_size / 
-                                                 lfs_handle->block_size)) {
-        if ((rc = lfs_dump_buffers(lfs_handle)) != GLOBUS_SUCCESS) {
+            (count_blocks(lfs_handle, LFS_BUFFER_READY) > (lfs_handle->preferred_write_size / lfs_handle->block_size))) {
+        if ((rc = lfs_dump_buffers(lfs_handle, 0)) != GLOBUS_SUCCESS) {
             globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Received a failure in lfs_dump_buffers\n");
+            globus_mutex_unlock(lfs_handle->buffer_mutex);
             goto cleanup;
         }
     }
+    globus_mutex_unlock(lfs_handle->buffer_mutex);
 cleanup:
     // Do some statistics
     if (rc == GLOBUS_SUCCESS) {
         if (nbytes != lfs_handle->io_block_size) {
             if (lfs_handle->io_block_size != 0) {
                 globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "receive %d blocks of size %d bytes\n",
-                    lfs_handle->io_count,lfs_handle->io_block_size);
+                        lfs_handle->io_count,lfs_handle->io_block_size);
             }
             lfs_handle->io_block_size = nbytes;
             lfs_handle->io_count=1;
@@ -456,15 +397,15 @@ cleanup:
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,"Setting transfer state to failed\n");
         set_done(lfs_handle, rc);
     }
-    
+
     lfs_handle->outstanding--;
     if (!is_done(lfs_handle)) {
         // Request more transfers.
         lfs_dispatch_write(lfs_handle);
     } else if (lfs_handle->outstanding == 0) {
         // No I/O in-flight, clean-up.
-        lfs_dump_buffers(lfs_handle);
-        lfs_dump_buffers_unbatched(lfs_handle);
+        lfs_dump_buffers(lfs_handle, 1);
+        //lfs_dump_buffers_unbatched(lfs_handle);
         rc = close_and_clean(lfs_handle, rc);
         if (!lfs_handle->sent_finish) {
             globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
@@ -474,8 +415,8 @@ cleanup:
         // Don't close the file because the other transfers will want to finish up.
         // However, do set the failure status.
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-            "We failed to finish the transfer, but there are %i outstanding writes left over.\n",
-            lfs_handle->outstanding);
+                "We failed to finish the transfer, but there are %i outstanding writes left over.\n",
+                lfs_handle->outstanding);
         if (!lfs_handle->sent_finish) {
             globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
             lfs_handle->sent_finish = GLOBUS_TRUE;
@@ -495,7 +436,7 @@ cleanup:
 static
 void
 lfs_dispatch_write(
-    globus_l_gfs_lfs_handle_t *      lfs_handle)
+        globus_l_gfs_lfs_handle_t *      lfs_handle)
 {
     globus_byte_t *                     buffer;
     globus_result_t                     rc = GLOBUS_SUCCESS;
@@ -506,35 +447,27 @@ lfs_dispatch_write(
     if (is_done(lfs_handle)) {
         return;
     }
-    //globus_gridftp_server_get_optimal_concurrency(lfs_handle->op,
-    //                                             &lfs_handle->optimal_count);
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
-    //
-    //    "lfs_dispatch_write; outstanding %d, optimal %d.\n",
-    //    lfs_handle->outstanding, lfs_handle->optimal_count);
-
     while (lfs_handle->outstanding < lfs_handle->optimal_count)  {
-
-        buffer = globus_malloc(lfs_handle->block_size);
+        buffer = lfs_get_free_buffer(lfs_handle, lfs_handle->block_size);
+        //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,"Allocating transfer to %lu\n", buffer);
         if (buffer == NULL) {
             MemoryError(lfs_handle, "Fail to allocate buffer for LFS data.", rc);
             goto cleanup;
         }
 
         rc = globus_gridftp_server_register_read(lfs_handle->op,
-            buffer, lfs_handle->block_size, lfs_handle_write_op,
-            lfs_handle);
+                buffer, lfs_handle->block_size, lfs_handle_write_op,
+                (void *) lfs_handle);
 
         if (rc != GLOBUS_SUCCESS) {
-            //GenericError(lfs_handle, "globus_gridftp_server_register_read() fail", rc);
             goto cleanup;
         }
         lfs_handle->outstanding++;
-
     }
 
 cleanup:
     if (rc != GLOBUS_SUCCESS) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,"Failed to dispatch a write\n");
         set_done(lfs_handle, rc);
         if (!lfs_handle->sent_finish) {
             globus_gridftp_server_finished_transfer(lfs_handle->op, lfs_handle->done_status);

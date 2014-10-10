@@ -32,7 +32,7 @@ extern statsd_link * lfs_statsd_link;
 #define STATSD_COUNT(name, count) if (lfs_statsd_link) { statsd_count(lfs_statsd_link, name, count, 1.0); }
 #define STATSD_TIMER_START(variable) time_t variable; time(& variable );
 #define STATSD_TIMER_END(name, variable) time_t variable ## _end; if (lfs_statsd_link) { time(& variable ## _end); statsd_timing(lfs_statsd_link, name, (int) (difftime(variable ## _end, variable) * 1000.0)); }
-
+#define STATSD_TIMER_RESET(variable) time(& variable);
 
 // Note: This really should be const, but the globus module activation code
 // doesn't have this as const.
@@ -43,6 +43,13 @@ extern globus_version_t gridftp_lfs_local_version;
 #define LFS_CKSM_TYPE_ADLER32 4
 #define LFS_CKSM_TYPE_MD5     8
 
+#define LFS_BUFFER_FREE 0
+#define LFS_BUFFER_FILLING 1
+#define LFS_BUFFER_READY 2
+#define LFS_BUFFER_PENDING_WRITE 3
+#define LFS_BUFFER_WRITING 4
+
+
 typedef struct lfs_queue_item_s {
     globus_byte_t * buffer;
     globus_size_t nbytes;
@@ -50,6 +57,17 @@ typedef struct lfs_queue_item_s {
     short buffer_in_file;
     struct lfs_queue_item_s * next;
 } lfs_queue_item_t;
+
+typedef struct lfs_buffer_s {
+    globus_size_t total_buffer_size;
+    globus_size_t block_size;
+    globus_byte_t * buffer;
+    globus_off_t * offsets;
+    globus_size_t * nbytes;
+    unsigned char * used;
+    struct lfs_buffer_s * next;
+} lfs_buffer_t;
+
 
 typedef struct globus_l_gfs_lfs_handle_s
 {
@@ -103,6 +121,7 @@ typedef struct globus_l_gfs_lfs_handle_s
     globus_mutex_t *                    mutex;
     globus_mutex_t *                    buffer_mutex;
     globus_mutex_t *                    offset_mutex;
+    globus_mutex_t *                    checksum_mutex;
     globus_cond_t *                     offset_cond;
     globus_cond_t *                     queued_cond;    // triggered when something is added to the queue
     globus_cond_t *                     dequeued_cond;  // triggered when something is popped off the queue
@@ -133,11 +152,18 @@ typedef struct globus_l_gfs_lfs_handle_s
     MD5_CTX                             md5;
     char                                md5_output[MD5_DIGEST_LENGTH];
     char                                md5_output_human[MD5_DIGEST_LENGTH*2+1];
-    uint32_t                            adler32;
-    char                                adler32_human[2*sizeof(uint32_t)+1];
+    unsigned char                       adler32_human[2*sizeof(uint32_t)+1];
     uint32_t                            crc32;
     uint32_t                            cksum;
-
+    
+    // new buffer variables
+    lfs_buffer_t *                      buffer_head;
+    // new checksum support
+    unsigned int                        checksum_length;
+    globus_off_t * checksum_offsets;
+    globus_size_t * checksum_lens; 
+    unsigned int checksum_index;
+    uint32_t * adler32;    
     // Statsd support
     statsd_link *                       statsd_link;
 } globus_l_gfs_lfs_handle_t;
@@ -148,7 +174,9 @@ extern char err_msg[MSG_SIZE];
 
 // figure out if a path if LFS based
 bool is_lfs_path(const globus_l_gfs_lfs_handle_t * lfs_handle, const char * path);
-
+globus_byte_t * lfs_get_free_buffer(lfs_handle_t *lfs_handle, globus_size_t nbytes);
+globus_result_t lfs_mark_buffer_ready(lfs_handle_t * lfs_handle, globus_byte_t* buffer, globus_off_t offset, globus_size_t nbytes);
+globus_size_t count_blocks(lfs_handle_t * lfs_handle, unsigned char state);
 // Function for sending a file to the client.
 void
 lfs_send(
@@ -174,7 +202,8 @@ lfs_store_buffer(
 
 globus_result_t
 lfs_dump_buffers(
-    globus_l_gfs_lfs_handle_t *      lfs_handle);
+    globus_l_gfs_lfs_handle_t *      lfs_handle,
+    int                              dump_partial);
 
 globus_result_t
 lfs_dump_buffers_unbatched(
@@ -182,31 +211,31 @@ lfs_dump_buffers_unbatched(
 
 globus_result_t
 lfs_dump_buffer_immed(
-    globus_l_gfs_lfs_handle_t *       lfs_handle,
-    globus_byte_t *                   buffer,
-    globus_size_t                     nbytes,
-    globus_off_t                      offset);
+        lfs_handle_t * lfs_handle, 
+        ex_iovec_t * iovec_file, 
+        tbuffer_t * buffer);
 
 globus_size_t lfs_used_buffer_count(globus_l_gfs_lfs_handle_t * lfs_handle);
 globus_result_t start_writers(lfs_handle_t *lfs_handle);
 globus_result_t stop_writers(lfs_handle_t *lfs_handle);
 
+//// Buffer management for reads
 // Buffer management for reads
-inline globus_result_t
+ globus_result_t
 allocate_buffers(
     lfs_handle_t *    lfs_handle,
     globus_size_t             num_buffers);
 
-inline globus_ssize_t
+ globus_ssize_t
 find_buffer(
     lfs_handle_t *    lfs_handle,
     globus_byte_t *    buffer);
 
-inline globus_ssize_t
+ globus_ssize_t
 find_empty_buffer(
     lfs_handle_t *    lfs_handle);
 
-inline void
+ void
 disgard_buffer(
     lfs_handle_t * lfs_handle,
     globus_ssize_t idx);
@@ -214,8 +243,6 @@ disgard_buffer(
 void
 remove_file_buffer(
     lfs_handle_t * lfs_handle);
-
-
 // Metadata-related functions
 void
 lfs_stat_gridftp(
@@ -257,7 +284,8 @@ void
 lfs_update_checksums(
     lfs_handle_t *    lfs_handle,
     globus_byte_t *    buffer,
-    globus_size_t      nbytes);
+    globus_size_t      nbytes,
+    globus_off_t       offset);
 
 void
 lfs_finalize_checksums(
