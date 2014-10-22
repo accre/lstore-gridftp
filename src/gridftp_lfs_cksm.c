@@ -102,7 +102,7 @@ void lfs_initialize_checksums(lfs_handle_t *lfs_handle) {
     lfs_handle->checksum_lens = globus_malloc(lfs_handle->checksum_length * sizeof(globus_size_t));
     lfs_handle->checksum_index = 0;
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
-        lfs_handle->adler32 = globus_malloc(lfs_handle->checksum_length * sizeof(unsigned long));
+        lfs_handle->adler32 = globus_malloc(lfs_handle->checksum_length * sizeof(uint32_t));
     }
 }
 
@@ -126,7 +126,7 @@ void lfs_update_checksums(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globu
                                                 lfs_handle->checksum_length * sizeof(globus_size_t));
         if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
             lfs_handle->adler32 = globus_realloc(lfs_handle->adler32,
-                                                    lfs_handle->checksum_length * sizeof(unsigned long));
+                                                    lfs_handle->checksum_length * sizeof(uint32_t));
         }
     }
     lfs_handle->checksum_lens[lfs_handle->checksum_index] = nbytes;
@@ -134,7 +134,7 @@ void lfs_update_checksums(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globu
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
         lfs_handle->adler32[lfs_handle->checksum_index] = adler32_tmp;
     }
-    lfs_handle->checksum_index += 1;
+    lfs_handle->checksum_index++;
     globus_mutex_unlock(lfs_handle->checksum_mutex);
 }
 #define BASE 65521
@@ -142,10 +142,10 @@ void lfs_update_checksums(lfs_handle_t *lfs_handle, globus_byte_t *buffer, globu
 #define MOD28(a) a %= BASE
 #define MOD63(a) a %= BASE
 // FIX THIS
-unsigned long adler32_combine_melo_hack(unsigned long adler1,unsigned long adler2, globus_off_t len2)
+uint32_t adler32_combine_melo_hack(uint32_t adler1,uint32_t adler2, globus_off_t len2)
 {
-    unsigned long sum1;
-    unsigned long sum2;
+    uint32_t sum1;
+    uint32_t sum2;
     unsigned rem;
 
     /* for negative len, return invalid adler32 as a clue for debugging */
@@ -172,31 +172,38 @@ unsigned long adler32_combine_melo_hack(unsigned long adler1,unsigned long adler
 void lfs_finalize_checksums(lfs_handle_t *lfs_handle) {
     if (lfs_handle->cksm_types & LFS_CKSM_TYPE_ADLER32) {
         globus_off_t pos = 0;
+        globus_off_t max_pos = 0;
         int keep_going = 1;
         uint32_t running_adler32;
+        // Figure out where the first one is and then put the pos
+        // at the second one
         for (unsigned int i = 0; i < lfs_handle->checksum_index; ++i) {
             if (lfs_handle->checksum_offsets[i] == 0) {
-                running_adler32 = lfs_handle->adler32[i];
                 pos = lfs_handle->checksum_lens[i];
-                break;
+                running_adler32 = lfs_handle->adler32[i];
+            }
+            if ((lfs_handle->checksum_lens[i] + lfs_handle->checksum_offsets[i])  > 
+                    max_pos) {
+                max_pos = lfs_handle->checksum_offsets[i] + lfs_handle->checksum_lens[i];
             }
         }
         while (keep_going) {
-            unsigned int found_this_pass = 0;
+            keep_going = 0;
             for (unsigned int i = 0; i < lfs_handle->checksum_index; ++i) {
                 if (pos == lfs_handle->checksum_offsets[i]) {
                     running_adler32 = adler32_combine_melo_hack(running_adler32, lfs_handle->adler32[i], lfs_handle->checksum_lens[i]);
-                    found_this_pass = 1;
+                    keep_going = 1;
                     pos += lfs_handle->checksum_lens[i];
                 }
             }
-            if (!found_this_pass) {
-                keep_going = 0;
-            }
         }
-        lfs_handle->adler32 = running_adler32;
-        human_readable_adler32(lfs_handle->adler32_human, lfs_handle->adler32);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Checksum ADLER32: %s %lu\n", lfs_handle->adler32_human, running_adler32);
+        lfs_handle->adler32_combined = running_adler32;
+        human_readable_adler32(lfs_handle->adler32_human, running_adler32);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Checksum ADLER32: %s %lu Pos: %u %u\n", lfs_handle->adler32_human, running_adler32, pos, max_pos);
+        if (pos != max_pos) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "CHECKSUM POSITION DOESNT MATCH: %u %u\n", pos, max_pos);
+        }
+
     }
 }
 

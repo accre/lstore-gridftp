@@ -159,11 +159,12 @@ typedef struct globus_l_gfs_lfs_handle_s
     // new buffer variables
     lfs_buffer_t *                      buffer_head;
     // new checksum support
-    unsigned int                        checksum_length;
+    unsigned long                        checksum_length;
     globus_off_t * checksum_offsets;
     globus_size_t * checksum_lens; 
-    unsigned int checksum_index;
-    uint32_t * adler32;    
+    unsigned long checksum_index;
+    uint32_t * adler32; 
+    uint32_t adler32_combined;
     // Statsd support
     statsd_link *                       statsd_link;
 } globus_l_gfs_lfs_handle_t;
@@ -213,7 +214,8 @@ globus_result_t
 lfs_dump_buffer_immed(
         lfs_handle_t * lfs_handle, 
         ex_iovec_t * iovec_file, 
-        tbuffer_t * buffer);
+        tbuffer_t * buffer,
+        unsigned int n_ops);
 
 globus_size_t lfs_used_buffer_count(globus_l_gfs_lfs_handle_t * lfs_handle);
 globus_result_t start_writers(lfs_handle_t *lfs_handle);

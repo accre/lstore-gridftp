@@ -608,7 +608,7 @@ lfs_start(
             "-c",
             lfs_handle->lfs_config,
             "-d",
-            "1",
+            "20",
             "-log",
             lfs_handle->log_filename
         };
