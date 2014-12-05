@@ -128,6 +128,7 @@ typedef struct globus_l_gfs_lfs_handle_s
     unsigned int                        blocked_writers;
     int                                 port;
     char *                              lfs_config;
+    char *                              lfs_debug_level;
     char *                              log_filename;
     char *                              host;
     char *                              mount_point;

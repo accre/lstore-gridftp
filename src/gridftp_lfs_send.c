@@ -48,9 +48,13 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
         if ((retval = lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs)) != 0)
         {
+            
             rc  = retval;
             GenericError(lfs_handle, "Failed to close file in LFS.", rc);
             lfs_handle->fd = NULL;
+        }
+        if (lfs_handle->syslog_host != NULL) {
+                syslog(LOG_INFO, "lfs_close: ret: %i path: %s", retval, lfs_handle->pathname_munged);
         }
     } else {
         if ((retval = close(lfs_handle->fd_posix)) != 0)
@@ -160,6 +164,9 @@ lfs_send(
         lfs_handle->fd->flags = O_RDONLY;
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from LFS: %s\n", lfs_handle->pathname_munged);
         retval = lfs_open_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs);
+        if (lfs_handle->syslog_host != NULL) {
+            syslog(LOG_INFO, "lfs_open: ret: %i path: %s", retval, lfs_handle->pathname_munged);
+        }        
         if (retval != 0) {
             if (0) { //errno == EINTERNAL) {
                 SystemError(lfs_handle,
@@ -252,7 +259,7 @@ lfs_finish_read_cb(
 
     // Do statistics
     if (lfs_handle->syslog_host != NULL) {
-            syslog(LOG_INFO, lfs_handle->syslog_msg, "READ", nbytes, lfs_handle->io_count);
+            //syslog(LOG_INFO, lfs_handle->syslog_msg, "READ", nbytes, lfs_handle->io_count);
     }
     if (nbytes != lfs_handle->io_block_size) {
         if (0 != lfs_handle->io_block_size) {
@@ -328,7 +335,7 @@ lfs_perform_read_cb(
     }
 
     if (lfs_handle->syslog_host != NULL) {
-        syslog(LOG_INFO, lfs_handle->syslog_msg, "READ", read_length, lfs_handle->io_count);
+        //syslog(LOG_INFO, lfs_handle->syslog_msg, "READ", read_length, lfs_handle->io_count);
     }
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
         "lfs_perform_read_cb for %u@%lu.\n", read_length, offset);
@@ -341,6 +348,9 @@ lfs_perform_read_cb(
         STATSD_TIMER_START(read_loop_timer);
         if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
             nbytes = lfs_read(lfs_handle->pathname, cur_buffer_pos, remaining_read, cur_offset, lfs_handle->fd);
+            if ((nbytes < 0) && (lfs_handle->syslog_host != NULL)) {
+                syslog(LOG_INFO, "lfs_read: ret: %i path: %s", nbytes, lfs_handle->pathname);
+            }
             if (nbytes == 0) {    /* eof */
                 // No error
                 globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "lfs_perform_read_cb EOF.\n");

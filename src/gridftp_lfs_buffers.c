@@ -5,7 +5,7 @@
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <stdlib.h>
-
+#include <assert.h>
 #define FOREACH_LIST(type, head, var) for (type * var = head; var != NULL; var = var->next)
 
 // fix some missing #defines
@@ -50,45 +50,47 @@ void lfs_log_buffer_status(lfs_handle_t * lfs_handle) {
 }
 
 void lfs_reap_buffers(lfs_handle_t * lfs_handle) {
-    lfs_buffer_t * prev = NULL;
     unsigned long big_buffer_count = 0;
     FOREACH_LIST(lfs_buffer_t, lfs_handle->buffer_head, buffer_iter) {
         big_buffer_count += 1;
     }
-    if (big_buffer_count <= lfs_handle->write_size_buffers) {
-        return;
-    }
-    FOREACH_LIST(lfs_buffer_t, lfs_handle->buffer_head, buffer_iter) {
-        int buffer_free = 1;
-        for (globus_size_t i = 0; i < (buffer_iter->total_buffer_size/buffer_iter->block_size); ++i) {
-            if (buffer_iter->used[i] != LFS_BUFFER_FREE) {
-                buffer_free = 0;
-                break;
+    int keep_going = 1;
+    while (keep_going && (big_buffer_count >= lfs_handle->write_size_buffers)) {
+        lfs_buffer_t * prev = NULL;
+        keep_going = 0;
+        FOREACH_LIST(lfs_buffer_t, lfs_handle->buffer_head, buffer_iter) {
+            int buffer_free = 1;
+            for (globus_size_t i = 0; i < (buffer_iter->total_buffer_size/buffer_iter->block_size); ++i) {
+                if (buffer_iter->used[i] != LFS_BUFFER_FREE) {
+                    buffer_free = 0;
+                    break;
+                }
             }
-        }
-        if (buffer_free == 0) {
-            prev = buffer_iter;
-            continue;
-        }
-        globus_free(buffer_iter->offsets);
-        globus_free(buffer_iter->nbytes);
-        globus_free(buffer_iter->used);
-        free(buffer_iter->buffer);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Freeing buffer\n");
-        if (buffer_iter == lfs_handle->buffer_head) {
-            // move the head past us
-            lfs_handle->buffer_head = buffer_iter->next;
-            globus_free(buffer_iter);
-            buffer_iter = lfs_handle->buffer_head;
-            if (buffer_iter == NULL) {
-                break;
+            if (buffer_free == 0) {
+                prev = buffer_iter;
+                continue;
             }
-        } else {
-            // find the previous guy and jump past us
-            prev->next = buffer_iter->next;
-            // but rewind the iterator so the next loop goes to the right place
-            globus_free(buffer_iter);
-            buffer_iter = prev;
+            keep_going = 1;
+            big_buffer_count--;
+            globus_free(buffer_iter->offsets);
+            globus_free(buffer_iter->nbytes);
+            globus_free(buffer_iter->used);
+            free(buffer_iter->buffer);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Freeing buffer\n");
+            if (buffer_iter == lfs_handle->buffer_head) {
+                // move the head past us
+                lfs_handle->buffer_head = buffer_iter->next;
+                globus_free(buffer_iter);
+                buffer_iter = lfs_handle->buffer_head;
+                prev = NULL;
+            } else {
+                // find the previous guy and jump past us
+                prev->next = buffer_iter->next;
+                // but rewind the iterator so the next loop goes to the right place
+                globus_free(buffer_iter);
+                buffer_iter = prev;
+            }
+            break;
         }
     }
 }
@@ -111,7 +113,9 @@ globus_result_t lfs_allocate_new_buffer(lfs_handle_t * lfs_handle) {
     // try to do something smart with the big buffers
     if (madvise(buffer_info->buffer, buffer_info->total_buffer_size, MADV_HUGEPAGE | MADV_DONTDUMP | MADV_RANDOM) == EINVAL) {
         if (madvise(buffer_info->buffer, buffer_info->total_buffer_size, MADV_HUGEPAGE | MADV_RANDOM) == EINVAL) {
-            madvise(buffer_info->buffer, buffer_info->total_buffer_size, MADV_RANDOM);
+            if (madvise(buffer_info->buffer, buffer_info->total_buffer_size, MADV_DONTDUMP | MADV_RANDOM) == EINVAL) {
+                madvise(buffer_info->buffer, buffer_info->total_buffer_size, MADV_RANDOM);
+            }
         }
     }
     if (retval != 0) {
@@ -276,6 +280,10 @@ int lfs_dequeue_buffer(lfs_handle_t *lfs_handle, ex_iovec_t **iovec_file, tbuffe
     unsigned int blocks_ready = 0;
     globus_off_t smallest_offset = -1;
     bytes_ready = 0;
+
+    // First, count the number of bytes/blocks that are ready and the smallest offset
+    // bytes_ready : number of bytes we expect to write
+    // blocks_ready : number of blocks we expect to write
     FOREACH_LIST(lfs_buffer_t, lfs_handle->buffer_head, buffer_iter) {
         for (globus_size_t i = 0; i < (buffer_iter->total_buffer_size/buffer_iter->block_size); ++i) {
             if (buffer_iter->used[i] == LFS_BUFFER_PENDING_WRITE) {
@@ -284,7 +292,8 @@ int lfs_dequeue_buffer(lfs_handle_t *lfs_handle, ex_iovec_t **iovec_file, tbuffe
                 if (smallest_offset < 0) {
                     smallest_offset = buffer_iter->offsets[i];
                 }
-                smallest_offset = (buffer_iter->offsets[i] < smallest_offset) ? buffer_iter->offsets[i] : smallest_offset;
+                smallest_offset = (buffer_iter->offsets[i] < smallest_offset) ? 
+                                            buffer_iter->offsets[i] : smallest_offset;
             }
             if (bytes_ready >= lfs_handle->preferred_write_size) {
                 break;
@@ -294,6 +303,8 @@ int lfs_dequeue_buffer(lfs_handle_t *lfs_handle, ex_iovec_t **iovec_file, tbuffe
             break;
         }
     }
+
+    // Allocate temporary space for command structures
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Backend dumping buffer to offset %ld\n", smallest_offset);
     *iovec_file = globus_malloc(sizeof(ex_iovec_t) * blocks_ready);
     iovec_t *iovec_mem = globus_malloc(sizeof(iovec_t) * blocks_ready);
@@ -310,66 +321,85 @@ int lfs_dequeue_buffer(lfs_handle_t *lfs_handle, ex_iovec_t **iovec_file, tbuffe
     int exnode_iter = -1;
     globus_size_t bytes_writing = 0;
     unsigned char initialized = 0;
-    unsigned char found_next_offset = 1;
     globus_off_t next_offset = smallest_offset;
-    smallest_offset = -1;
     // Keep trying to flush
-    while (block_iter <= blocks_ready) {
-        // scan through all buffers looking for next_offset
-        // There are two options:
-        // 1) If found, add iovec to ex_iovec and increment next_offset
-        // 2) If not found, set next_offset to smallest offset from previous iteration
-
-        // Did we loop through last time and find nothing?
-        if (!found_next_offset && (smallest_offset == -1)) {
-            break;
-        }
-
-        if (!found_next_offset) {
-            next_offset = smallest_offset;
-            smallest_offset = -1;
-            initialized = 0;
-        }
-        found_next_offset = 0;
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Backend loop (%u < %u) off %ld \n", block_iter, blocks_ready, next_offset);
+    globus_mutex_lock(lfs_handle->checksum_mutex);
+    int loops_without_writes = 0;
+    while (block_iter < blocks_ready) {
+        int did_write = 0;
+        // find smallest offset
+        // post condition: smallest_offset is the unwritten block with the smallest offset
+        smallest_offset = -1;
         FOREACH_LIST(lfs_buffer_t, lfs_handle->buffer_head, buffer_iter) {
             for (globus_size_t i = 0; i < (buffer_iter->total_buffer_size/buffer_iter->block_size); ++i) {
                 if (buffer_iter->used[i] == LFS_BUFFER_PENDING_WRITE) {
-                    if (buffer_iter->offsets[i] != next_offset) {
-                        smallest_offset = ((smallest_offset < 0) ||
-                                            (buffer_iter->offsets[i] < smallest_offset)) ? buffer_iter->offsets[i] : smallest_offset;
-                    } else {
-                        found_next_offset = 1;
+                    smallest_offset = ((smallest_offset < 0) ||
+                                            (buffer_iter->offsets[i] < smallest_offset)) ? 
+                                             buffer_iter->offsets[i] : smallest_offset;
+                }
+            }
+        }
+
+        // If the smallest offset isn't the next offset, there's a hole
+        if ((initialized == 1) && (smallest_offset != next_offset)) {
+            initialized = 0;
+        }
+        next_offset = smallest_offset;
+        FOREACH_LIST(lfs_buffer_t, lfs_handle->buffer_head, buffer_iter) {
+            for (globus_size_t i = 0; i < (buffer_iter->total_buffer_size/buffer_iter->block_size); ++i) {
+                if (buffer_iter->used[i] == LFS_BUFFER_PENDING_WRITE) {
+                    if (buffer_iter->offsets[i] == next_offset) {
+                        did_write = 1;
                         next_offset += buffer_iter->nbytes[i];
                         buffer_iter->used[i] = LFS_BUFFER_WRITING;
                         bytes_writing += buffer_iter->nbytes[i];
                         if (initialized == 0) {
                             initialized = 1;
                             ++exnode_iter;
-                            globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Starting exnode at offset %ld ex_iter: %i\n", buffer_iter->offsets[i], exnode_iter);
                             ((*iovec_file) + exnode_iter)->offset = buffer_iter->offsets[i];
                             ((*iovec_file) + exnode_iter)->len = 0;
                         }
-                        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Adding to exnode at offset %ld (len %lu) (iter %lu)\n", buffer_iter->offsets[i], buffer_iter->nbytes[i], block_iter);
                         ((*iovec_file) + exnode_iter)->len += buffer_iter->nbytes[i];
-                        if ((*iovec_file)[exnode_iter].len == 0) { 
+                        if (((*iovec_file) + exnode_iter)->len == 0) { 
                             globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Zero-length block? You idiot!\n");
                         }
                         iovec_mem[block_iter].iov_base = (void *)( buffer_iter->buffer + (i * buffer_iter->block_size));
                         iovec_mem[block_iter].iov_len = buffer_iter->nbytes[i];
                         (*used_array)[block_iter] = &(buffer_iter->used[i]);
                         ++block_iter;
-                    }
+                        // doublecheck this block isn't already written
+                        for (unsigned long k = 0; k <= lfs_handle->checksum_index; ++k) {
+                            globus_size_t curr_size = lfs_handle->checksum_lens[k];
+                            globus_off_t curr_offset = lfs_handle->checksum_offsets[k];
+                            if ( (buffer_iter->offsets[i] >= curr_offset) &&
+                                 (buffer_iter->offsets[i] < (curr_offset + curr_size))) {
+                                 assert(1 == 0);
+                            }
+                        }
+                     }
                 }
-                if (block_iter > blocks_ready) {
+                // (block_iter == blocks_ready - 1) but,
+                // We increement block_iter at the end, so this is actually
+                // (block_iter - 1) == (blocks_ready - 1)
+                if (block_iter == blocks_ready) {
                     break;
                 }
             }
-            if (block_iter > blocks_ready) {
+            if (block_iter == blocks_ready) {
                 break;
             }
         }
+        if (did_write) {
+            loops_without_writes = 0;
+        } else {
+            loops_without_writes++;
+        }
+        if (loops_without_writes > 10) {
+            // FIXME: bandaid
+            break;
+        }
     }
+    globus_mutex_unlock(lfs_handle->checksum_mutex);
     *n_ops = exnode_iter + 1;
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Backend loop (%u < %u) off %ld ops %i\n", block_iter, blocks_ready, next_offset, *n_ops);
     // we increment block_iter at the end of loops, so subtract one from (block_iter + 1)
@@ -519,6 +549,9 @@ globus_result_t lfs_dump_buffer_immed(lfs_handle_t * lfs_handle, ex_iovec_t * io
         int bytes_written;
         bytes_written = lfs_write_ex(lfs_handle->pathname_munged, n_ops, iovec_file, buffer, 0, lfs_handle->fd);
         if (bytes_written != nbytes) {
+            if ((lfs_handle->syslog_host != NULL)) {
+                syslog(LOG_INFO, "lfs_write: ret: %i path: %s", bytes_written, lfs_handle->pathname);
+            }
             STATSD_COUNT("lfs_write_failure",1);
             globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Error writing %lu != %i\n", nbytes, -bytes_written);
             SystemError(lfs_handle, "write into LFS", rc);

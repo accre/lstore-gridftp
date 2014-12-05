@@ -53,10 +53,14 @@ close_and_clean(lfs_handle_t *lfs_handle, globus_result_t rc) {
     if (is_lfs_path(lfs_handle, lfs_handle->pathname)) {
         if ((retval = lfs_release_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs)) != 0)
         {
+
             STATSD_COUNT("lfs_write_close_failure", 1);
             rc = retval;
             GenericError(lfs_handle, "Failed to close file in LFS.", retval);
             lfs_handle->fd = NULL;
+        }
+        if ((lfs_handle->syslog_host != NULL)) {
+            syslog(LOG_INFO, "lfs_close: ret: %i path: %s", retval, lfs_handle->pathname_munged);
         }
     } else {
         if ((retval = close(lfs_handle->fd_posix)) != 0) {
@@ -238,8 +242,11 @@ lfs_recv(
         lfs_handle->fd->direct_io = 0;
         lfs_handle->fd->flags = O_WRONLY;
         retval = lfs_open_real(lfs_handle->pathname_munged, lfs_handle->fd, lfs_handle->fs);
-        if (retval != 0) {
-            if (0) { //errno == EINTERNAL) {
+        if ((lfs_handle->syslog_host != NULL)) {
+            syslog(LOG_INFO, "lfs_open: ret: %i path: %s", retval, lfs_handle->pathname_munged);
+        }        if (retval != 0) {
+
+        if (0) { //errno == EINTERNAL) {
                 SystemError(lfs_handle,
                         "opening file due to an internal LFS error; "
                         "could be a misconfiguration or bad installation at the site.",

@@ -527,6 +527,7 @@ lfs_start(
     lfs_handle->host = "hadoop-name";
     lfs_handle->mount_point = "/lio/lfs";
     lfs_handle->port = 9000;
+    lfs_handle->lfs_debug_level = "20";
     lfs_handle->lfs_config = "/etc/lio/lio-fuse.cfg";
     char * replicas_char = getenv("GRIDFTP_LFS_REPLICAS");
     char * namenode = getenv("GRIDFTP_LFS_NAMENODE");
@@ -534,6 +535,7 @@ lfs_start(
     char * mount_point_char = getenv("GRIDFTP_LFS_MOUNT_POINT");
     char * load_limit_char = getenv("GRIDFTP_LOAD_LIMIT");
     char * lfs_config_char = getenv("GRIDFTP_LFS_CONFIG");
+    char * lfs_debug_level_char = getenv("GRIDFTP_LFS_DEBUG_LEVEL");
 
     // Get our hostname
     lfs_handle->local_host = globus_malloc(256);
@@ -592,6 +594,11 @@ lfs_start(
         lfs_handle->lfs_config = lfs_config_char;
     }
 
+    if (lfs_debug_level_char != NULL) {
+        lfs_handle->lfs_debug_level = lfs_debug_level_char;
+    }
+
+
     // store the filename for the logs
     lfs_handle->log_filename = globus_malloc(256);
     if (lfs_handle->log_filename) {
@@ -608,17 +615,13 @@ lfs_start(
             "-c",
             lfs_handle->lfs_config,
             "-d",
-            "20",
+            lfs_handle->lfs_debug_level,
             "-log",
             lfs_handle->log_filename
         };
 
 
-    char * lfs_debug_level = getenv("GRIDFTP_LFS_DEBUG_LEVEL");
-    if (lfs_debug_level) {
-        argv[6] = strdup(lfs_debug_level);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,"Setting lfs logging to %s\n", argv[6]);
-    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,"Setting lfs logging to %s\n", lfs_handle->lfs_debug_level);
 
     struct stat dummy;
     if (stat(lfs_handle->lfs_config,& dummy)) {
