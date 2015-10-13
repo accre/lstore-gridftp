@@ -1,5 +1,6 @@
 
 #include "gridftp_lfs.h"
+#include "type_malloc.h"
 #include <grp.h>
 
 /* Forward decls for this file.
@@ -23,31 +24,6 @@ globus_l_gfs_file_copy_stat(
     const char *                        filename,
     const char *                        symlink_target);
 
-// callaback needed from readdir stuff
-int fill_from_fuse(
-        void *              buf,
-        const char *        name,
-        const struct stat * stbuf,
-        off_t               off)
-{
-    // Readdir calls this once per directory entry
-    globus_l_gfs_file_copy_stat(
-        (globus_gfs_stat_t *) buf + off,
-        stbuf,
-        name,
-        NULL);
-    return 0;
-}
-int dummy_filler(
-        void *              buf,
-        const char *        name,
-        const struct stat * stbuf,
-        off_t               off)
-{
-    off_t temp = *((off_t *)buf) + 1;
-    *((off_t*)buf) = temp;
-    return 0;
-}
 /*************************************************************************
  *  stat
  *  ----
@@ -57,6 +33,7 @@ int dummy_filler(
  *  a file exists and has the proper permissions, etc.
  ************************************************************************/
 // Used for falling back to POSIX instead of LFS
+void
 lfs_stat_gridftp_posix(
     globus_gfs_operation_t              op,
     globus_gfs_stat_info_t *            stat_info,
@@ -254,10 +231,10 @@ lfs_stat_gridftp(
     char                                basepath[MAXPATHLEN];
     char                                filename[MAXPATHLEN];
     char *                              PathName;
-    globus_l_gfs_lfs_handle_t *       lfs_handle;
+    lfs_handle_t *                      lfs_handle;
     GlobusGFSName(globus_l_gfs_lfs_stat);
 
-    lfs_handle = (globus_l_gfs_lfs_handle_t *) user_arg;
+    lfs_handle = (lfs_handle_t *) user_arg;
     PathName=stat_info->pathname;
     if (!is_lfs_path(lfs_handle, PathName)) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Falling back to POSIX stat, file not in LFS\n");
@@ -279,10 +256,13 @@ lfs_stat_gridftp(
     snprintf(err_msg, MSG_SIZE, "Going to do stat on file %s.\n", PathName);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, err_msg);
 
-
+    // ** If we made it here then it's a file in LFS
     struct stat fileInfo;
+    struct stat *stat;
+    char *readlink;
     int retval;
-    retval = lfs_stat_real(PathName, &fileInfo, lfs_handle->fs);
+
+    retval = lio_stat(lfs_handle->fs, lfs_handle->fs->creds, PathName, &fileInfo, lfs_handle->mount_point, &readlink);
     if (retval == -ENOENT) {
         result = GlobusGFSErrorSystemError("Stat: file doesn't exist", ENOENT);
         goto error_stat1;
@@ -290,6 +270,7 @@ lfs_stat_gridftp(
         result = GlobusGFSErrorSystemError("Stat: unknown error", retval);
         goto error_stat1;
     }
+
     snprintf(err_msg, MSG_SIZE, "Finished LFS stat operation.\n");
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
 
@@ -303,59 +284,99 @@ lfs_stat_gridftp(
     {
         stat_array = (globus_gfs_stat_t *)
             globus_malloc(sizeof(globus_gfs_stat_t));
-        if(!stat_array)
-        {
+        if(!stat_array) {
             result = GlobusGFSErrorMemory("stat_array");
             goto error_alloc1;
         }
 
         globus_l_gfs_file_copy_stat(
-            stat_array, &fileInfo, filename, NULL);
+            stat_array, &fileInfo, filename, readlink);
+         if (readlink) free(readlink);
         //lfsFreeFileInfo(fileInfo, 1);
         stat_count = 1;
     }
     else
     {
-        int i, dirfd, retval;
-        struct fuse_file_info dirInfo;
-        DIR* dirInfo_posix = NULL;
-        struct dirent* dirEnt_posix = NULL;
-        dirfd = retval = 0;
-        retval = lfs_opendir_real(PathName, &dirInfo, lfs_handle->fs);
-        if (retval == -ENOENT) {
-            result = GlobusGFSErrorSystemError("Stat: path doesn't exist", ENOENT);
-            goto error_open;
-        } else if (retval < 0) {
-            result = GlobusGFSErrorSystemError("Unknown opendir error", retval);
-            goto error_open;
+        Stack_t *stack = new_stack();  // ** This is where all the stats go
+
+        // ** Already have the info for "."
+        type_malloc(stat, struct stat, 1);
+        *stat = fileInfo;
+        push(stack, stat);  push(stack, strdup(".")); push(stack, readlink);
+
+        // ** Now do the same for ".."
+        char *dotdot;
+        if (strcmp(basepath, "/") != 0) {
+           char *file;
+           os_path_split(basepath, &dotdot, &file);
+           free(file);
+        } else {
+           dotdot = strdup(basepath);
         }
 
-        off_t dirCount = 0;
-        // dummy_filler will increment dirCount
-        retval = lfs_readdir_real(PathName, &dirCount, dummy_filler, 0, &dirInfo, lfs_handle->fs);
-        stat_array = (globus_gfs_stat_t *) \
-                                globus_malloc(\
-                                    sizeof(globus_gfs_stat_t) * dirCount);
-        stat_count = dirCount;
-        if(!stat_array)
-        {
-            result = GlobusGFSErrorMemory("stat_array");
-            goto error_alloc1;
-        }
-        if (dirCount == 0)
-        {
-            result = GlobusGFSErrorSystemError("Stat: got an empty directory?", ENOENT);
-            goto error_read;
-        }
-        // have the array initialized, fill it
-        retval = lfs_readdir_real(PathName, stat_array, fill_from_fuse, 0, &dirInfo, lfs_handle->fs);
+        retval = lio_stat(lfs_handle->fs, lfs_handle->fs->creds, dotdot, &fileInfo, lfs_handle->mount_point, &readlink);
         if (retval == -ENOENT) {
-            result = GlobusGFSErrorSystemError("Stat: path doesn't exist", ENOENT);
-            goto error_read;
-        } else if (retval < 0) {
-            result = GlobusGFSErrorSystemError("Unknown opendir error", retval);
-            goto error_read;
+           result = GlobusGFSErrorSystemError("Stat: file doesn't exist", ENOENT);
+           goto error_stat1;
+        } else if (retval != 0) {
+           result = GlobusGFSErrorSystemError("Stat: unknown error", retval);
+           goto error_stat1;
         }
+
+  log_printf(1, "dot=%s dotdot=%s\n", PathName, dotdot);
+
+        type_malloc(stat, struct stat, 1);
+        *stat = fileInfo;
+        push(stack, stat);  push(stack, strdup(".."));
+        free(dotdot);
+
+
+        // ** Now make the iterator
+        char *val[_lio_stat_key_size];
+        int v_size[_lio_stat_key_size];
+        char path[OS_PATH_MAX];
+        char *fname;
+        int i, ftype, prefix_len;
+        os_object_iter_t *it;
+        os_regex_table_t *path_regex;
+
+        for (i=0; i<_lio_stat_key_size; i++) {
+            v_size[i] = -lfs_handle->fs->max_attr;
+            val[i] = NULL;
+        }
+
+        snprintf(path, OS_PATH_MAX, "%s/%s", PathName, "*");
+        path_regex = os_path_glob2regex(path);
+        it = lio_create_object_iter_alist(lfs_handle->fs, lfs_handle->fs->creds, path_regex, NULL, OS_OBJECT_ANY, 0, _lio_stat_keys, (void **)val, v_size, _lio_stat_key_size);
+
+        // ** Now do the looping
+        for (;;) {
+           // ** If we made it here then grab the next file and look it up.
+           ftype = lio_next_object(lfs_handle->fs, it, &fname, &prefix_len);
+           if (ftype <= 0) { // ** No more files
+              break;
+           }
+
+          type_malloc(stat, struct stat, 1);
+          _lio_parse_stat_vals(fname, stat, val, v_size,lfs_handle->mount_point, &readlink);
+          push(stack, stat); push(stack, strdup(fname+prefix_len+1)); push(stack, readlink);
+          free(fname);
+        }
+
+        // ** Now destroy the iterator
+        lio_destroy_object_iter(lfs_handle->fs, it);
+        os_regex_table_destroy(path_regex);
+
+        // ** Put everything in the format globus wants
+        stat_count = stack_size(stack) / 2;
+        stat_array = (globus_gfs_stat_t *) globus_malloc(sizeof(globus_gfs_stat_t) * stat_count);
+        for (i=stat_count-1; i>0; i--) {
+           readlink = pop(stack); fname = pop(stack); stat = pop(stack);
+           globus_l_gfs_file_copy_stat(stat_array + i, stat, fname, readlink);
+           free(stat); free(fname); free(readlink);
+        }
+
+        free_stack(stack, 1);
     }
 
     globus_gridftp_server_finished_stat(
@@ -365,11 +386,8 @@ lfs_stat_gridftp(
     globus_l_gfs_file_destroy_stat(stat_array, stat_count);
     return;
 
-error_read:
     globus_l_gfs_file_destroy_stat(stat_array, stat_count);
 
-error_alloc2:
-error_open:
 error_alloc1:
 error_stat1:
     globus_gridftp_server_finished_stat(op, result, NULL, 0);
@@ -461,8 +479,6 @@ globus_l_gfs_file_copy_stat(
     const char *                        filename,
     const char *                        symlink_target)
 {
-    struct passwd *result;
-    struct group *gresult;
     GlobusGFSName(globus_l_gfs_file_copy_stat);
 
     stat_object->mode     = (S_ISDIR(fileInfo->st_mode)) ? (S_IFDIR | fileInfo->st_mode) :  (S_IFREG | fileInfo->st_mode);

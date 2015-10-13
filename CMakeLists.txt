@@ -50,8 +50,6 @@ set(GRIDFTP_OBJS
     src/gridftp_lfs_recv.c
     src/gridftp_lfs_send.c
     src/gridftp_lfs_stat.c
-    src/gridftp_lfs_buffers.c
-    src/gridftp_lfs_cksm.c
     src/statsd-client.c
 )
 
