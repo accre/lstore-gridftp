@@ -8,6 +8,8 @@ aclocal.m4
 *.lo
 *.la
 config.log
+config.h
+gridftp_version.c
 config.status
 autom4te.cache/*
 CMakeFiles/*
