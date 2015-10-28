@@ -1,3 +1,7 @@
+// *********************************************************************************************************
+// ****** NOTE: In order for these macros to work in your code you must have called            *************
+// ******       the GlobusGFSName(your-func-here) macro to define the local _gfs_name variable *************
+// *********************************************************************************************************
 
 // Messages should not end with newline
 #define MESSAGE_BUFFER_SIZE 1024
