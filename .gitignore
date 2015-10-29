@@ -8,6 +8,8 @@ aclocal.m4
 *.lo
 *.la
 config.log
+config.h
+gridftp_version.c
 config.status
 autom4te.cache/*
 CMakeFiles/*
@@ -15,5 +17,3 @@ CMakeCache.txt
 cmake_install.cmake
 install_manifest.txt
 *.so
-#These are generated via cmake using the *.in variants
-gridftp_lfs_version.c

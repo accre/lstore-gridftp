@@ -71,8 +71,6 @@ if(NOT APPLE)
     list(APPEND LIBS rt)
 endif(NOT APPLE)
 
-string(REPLACE "-" "_" SANITIZED_LSTORE_PROJECT_NAME ${LSTORE_PROJECT_NAME})
-
 # gather the info needed to make ELF shared libraries provide version info when executed
 # based on https://polentino911.wordpress.com/2013/08/08/make-your-own-executable-shared-library-on-linux
 # Note: this logic probably has problems with some cross-compiling scenarios
@@ -88,7 +86,7 @@ if(UNIX AND NOT APPLE)
             string(REGEX REPLACE ".*[[]${INTERPRETER_DESCRIPTION} ([/][^ ].+)[]].*" "\\1"
                 ELF_INTERPRETER_PATH "${result}")
             message(STATUS "ELF interpreter is ${ELF_INTERPRETER_PATH}")
-            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -e print_${SANITIZED_LSTORE_PROJECT_NAME}_version_and_exit")
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -e print_${LSTORE_PROJECT_NAME}_version_and_exit")
             set(CMAKE_INSTALL_SO_NO_EXE FALSE)  # Default exec bit policy for sharedlibs varies by OS and distro, force bits to be set
             set(ELF_EXEC_LIB 1)
         endif(return_value)
@@ -101,12 +99,16 @@ site_name(BUILD_HOST)
 Date(BUILD_DATE)
 CompilerVersion(COMPILER_VERSION)
 CompilerFlags(COMPILER_FLAGS)
-configure_file(${CMAKE_SOURCE_DIR}/${SANITIZED_LSTORE_PROJECT_NAME}_version.c.in
-               ${CMAKE_SOURCE_DIR}/${SANITIZED_LSTORE_PROJECT_NAME}_version.c)
-set(LSTORE_PROJECT_OBJS ${LSTORE_PROJECT_OBJS} ${SANITIZED_LSTORE_PROJECT_NAME}_version.c)
+configure_file(${CMAKE_SOURCE_DIR}/${LSTORE_PROJECT_NAME}_version.c.in
+               ${CMAKE_SOURCE_DIR}/${LSTORE_PROJECT_NAME}_version.c)
+set(LSTORE_PROJECT_OBJS ${LSTORE_PROJECT_OBJS} ${LSTORE_PROJECT_NAME}_version.c)
 
 add_library(library SHARED ${LSTORE_PROJECT_OBJS})
-set_target_properties(library PROPERTIES OUTPUT_NAME "${LSTORE_PROJECT_NAME}")
+if("${LSTORE_LIBRARY_NAME}")
+    set_target_properties(library PROPERTIES OUTPUT_NAME "${LSTORE_PROJECT_NAME}")
+else()
+    set_target_properties(library PROPERTIES OUTPUT_NAME "${LSTORE_LIBRARY_NAME}")
+endif("${LSTORE_LIBRARY_NAME}")
 set_target_properties(library PROPERTIES CLEAN_DIRECT_OUTPUT 1)
 if(WANT_STATIC)
     message(STATUS "Building a static library")
