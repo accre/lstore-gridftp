@@ -47,7 +47,7 @@ set(LSTORE_PROJECT_OBJS
     src/gridftp_lfs_stat.c src/statsd-client.c
 )
 
-set(LSTORE_LIBRARY_NAME libglobus_gridftp_server_lfs)
+set(LSTORE_LIBRARY_NAME globus_gridftp_server_lfs)
 
 # Common functionality is stored here
 include(cmake/LStoreCommon.cmake)
