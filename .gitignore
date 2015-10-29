@@ -15,3 +15,5 @@ CMakeCache.txt
 cmake_install.cmake
 install_manifest.txt
 *.so
+#These are generated via cmake using the *.in variants
+gridftp_lfs_version.c

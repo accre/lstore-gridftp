@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 2.8)
-cmake_policy(SET CMP0048 OLD)
+if(NOT (${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION} LESS 3.0))
+	# only CMAKE 3.0 and greater supports this (NOT ... LESS because CMAKE does not have a GREATER_OR_EQUAL_TO conditional)
+	# Not needed for older versions because older versions obviously use the old policy without specially requesting it
+	cmake_policy(SET CMP0048 OLD)
+	# ^^^ use the old VERSION variable behavior
+endif()
 
 # make a project
 # Name this project
@@ -28,7 +33,7 @@ include_directories(
 
 list(APPEND LIBS
     ${IBP_LIBRARY} ${GOP_LIBRARY} ${CZMQ_LIBRARY} ${TOOLBOX_LIBRARY}
-    ${JERASURE_LIBRARY} ${ZMQ_LIBRARY} ${FUSE_LIBRARIES}
+    ${JERASURE_LIBRARY} ${ZMQ_LIBRARY} ${FUSE_LIBRARIES} gssapi_krb5
 )
 
 #Common Objects
