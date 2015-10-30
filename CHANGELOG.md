@@ -1,0 +1,6 @@
+# **[0.3.0](https://github.com/accre/lstore-gridftp/tree/ACCRE_0.3.0)** (2015-10-29)
+
+## Changes ([full changelog](https://github.com/accre/lstore-gridftp/compare/ACCRE_0.0.0...ACCRE_0.3.0))
+
+
+
