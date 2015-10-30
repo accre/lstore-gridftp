@@ -812,7 +812,7 @@ lfs_recv(
             gop_sync_exec(gop_lio_truncate(lfs_handle->fd, -lfs_handle->default_size));
         }
     } else {
-        retval = open(PathName,  O_WRONLY | O_CREAT );
+        retval = open(PathName,  O_WRONLY | O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP );
         if (retval > 0) {
             lfs_handle->fd_posix = retval;
         } else {
