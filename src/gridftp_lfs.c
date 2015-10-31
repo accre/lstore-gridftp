@@ -546,8 +546,14 @@ lfs_start(
     lfs_handle->globus_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
 
     apr_wrapper_start();  // ** Go ahead and start up APR.  I'll need to stop it at the end also.
+    apr_status_t pool_status = apr_pool_create(&(lfs_handle->mpool), NULL);
+    if (pool_status != APR_SUCCESS) {
+        MemoryError(lfs_handle, "Unable to allocate an APR threadpool for LFS.", rc);
+        finished_info.result = pool_status;
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+        return;
+    }
 
-    assert(apr_pool_create(&(lfs_handle->mpool), NULL) == APR_SUCCESS);
     apr_thread_mutex_create(&(lfs_handle->lock), APR_THREAD_MUTEX_DEFAULT, lfs_handle->mpool);
     if (!(lfs_handle->lock)) {
         MemoryError(lfs_handle, "Unable to allocate a new mutex for LFS.", rc);
@@ -578,9 +584,9 @@ lfs_start(
     ifd = inip_read(lfs_handle->lfs_config);
     lfs_handle->mount_point = inip_get_string(ifd, section, "mount_prefix", "Oops!");
     debug_level = inip_get_string(ifd, section, "log_level", NULL);
-   lfs_handle->send_stages = inip_get_integer(ifd, section, "send_stages", 4);
+    lfs_handle->send_stages = inip_get_integer(ifd, section, "send_stages", 4);
     lfs_handle->total_buffer_size = inip_get_integer(ifd, section, "max_buffer_size", 100*1024*1024);
-// set by gridftp....    lfs_handle->buffer_size = inip_get_integer(ifd, section, "buffer_size", 128*1024);
+    // set by gridftp....    lfs_handle->buffer_size = inip_get_integer(ifd, section, "buffer_size", 128*1024);
     lfs_handle->n_buffers = 0;  // ** Calculated and set by the R/W operation
     lfs_handle->n_cksum_threads = inip_get_integer(ifd, section, "n_cksum_threads", 4);
     lfs_handle->do_calc_adler32 = inip_get_integer(ifd, section, "do_calc_adler32", 1);
@@ -588,13 +594,16 @@ lfs_start(
     lfs_handle->log_autoremove = inip_get_integer(ifd, section, "log_autoremove", 0);
     lfs_handle->default_size = inip_get_integer(ifd, section, "default_size", 0);
     lfs_handle->low_water_fraction = inip_get_double(ifd, section, "low_water_fraction", 0.25);
-    assert(lfs_handle->low_water_fraction != 0);
     lfs_handle->high_water_fraction = inip_get_double(ifd, section, "high_water_fraction", 0.75);
-    assert(lfs_handle->low_water_fraction != 0);
     lfs_handle->low_water_flush = 0;  // ** These are set by the recv command
     lfs_handle->high_water_flush = 0;
     allow_control_c = inip_get_integer(ifd, section, "allow_control_c", 0);
-
+    if ((lfs_handle->low_water_fraction == 0) || 
+            (lfs_handle->high_water_fraction == 0)) {
+        GenericError(lfs_handle, "Both low_water_fraction and high_water_fraction cannot be zero", rc);
+        finished_info.result = rc;
+        globus_gridftp_server_operation_finished(op, rc, &finished_info);
+    }
     char *lprintf= inip_get_string(ifd, section, "log_fname_printf", "/lio/log/gridftp.log");
     lfs_handle->log_filename = globus_malloc(4096);
     memset(lfs_handle->log_filename, 0, 4096);
