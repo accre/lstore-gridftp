@@ -1,4 +1,4 @@
-#include "gridftp_lfs.h"
+#sinclude "gridftp_lfs.h"
 
 #include "type_malloc.h"
 #include "stack.h"
