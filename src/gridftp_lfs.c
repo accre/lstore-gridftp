@@ -22,8 +22,7 @@ lfs_handle_t *global_lfs_handle;
 /*
  *  Globals for this library.
  */
-globus_version_t gridftp_lfs_local_version =
-{
+globus_version_t gridftp_lfs_local_version = {
     0, /* major version number */
     0, /* minor/bug version number */
     1,
@@ -39,23 +38,19 @@ static void lfs_trev(globus_gfs_event_info_t *, void *);
 inline void set_done(lfs_handle_t *, globus_result_t);
 static int  lfs_activate(void);
 static int  lfs_deactivate(void);
-static void lfs_command(globus_gfs_operation_t, globus_gfs_command_info_t *, void *);
+static void lfs_command(globus_gfs_operation_t, globus_gfs_command_info_t *,
+                        void *);
 static void lfs_start(globus_gfs_operation_t, globus_gfs_session_info_t *);
 
-void
-lfs_destroy_gridftp(
-    void *                              user_arg);
+void lfs_destroy_gridftp(void * user_arg);
 
-void
-lfs_start(
-    globus_gfs_operation_t              op,
-    globus_gfs_session_info_t *         session_info);
+void lfs_start(globus_gfs_operation_t op,
+                globus_gfs_session_info_t * session_info);
 
 /*
  *  Interface definitions for LFS
  */
-static globus_gfs_storage_iface_t       globus_l_gfs_lfs_dsi_iface =
-{
+static globus_gfs_storage_iface_t globus_l_gfs_lfs_dsi_iface = {
     GLOBUS_GFS_DSI_DESCRIPTOR_BLOCKING | GLOBUS_GFS_DSI_DESCRIPTOR_SENDER,
     lfs_start,
     lfs_destroy_gridftp,
@@ -76,8 +71,7 @@ static globus_gfs_storage_iface_t       globus_l_gfs_lfs_dsi_iface =
  *  Module definitions; hooks into the Globus module system.
  *  Initialized when library loads.
  */
-GlobusExtensionDefineModule(globus_gridftp_server_lfs) =
-{
+GlobusExtensionDefineModule(globus_gridftp_server_lfs) = {
     "globus_gridftp_server_lfs",
     lfs_activate,
     lfs_deactivate,
@@ -88,30 +82,28 @@ GlobusExtensionDefineModule(globus_gridftp_server_lfs) =
 
 // Custom SEGV handler due to the presence of Java handlers.
 // TODO: Needed? Probably not, AMM
-void
-segv_handler (int sig)
+void segv_handler (int sig)
 {
-  STATSD_COUNT("segv_received",1);
-  printf ("SEGV triggered in native code.\n");
-  const int max_trace = 32;
-  void *trace[max_trace];
-  char **messages = (char **)NULL;
-  int i, trace_size = 0;
+    STATSD_COUNT("segv_received",1);
+    printf ("SEGV triggered in native code.\n");
+    const int max_trace = 32;
+    void *trace[max_trace];
+    char **messages = (char **)NULL;
+    int i, trace_size = 0;
 
-  trace_size = backtrace(trace, max_trace);
-  messages = backtrace_symbols(trace, trace_size);
-  for (i=0; i<trace_size; ++i) {
-	printf("[bt] %s\n", messages[i]);
-  }
-  raise (SIGQUIT);
-  signal (SIGSEGV, SIG_DFL);
-  raise (SIGSEGV);
+    trace_size = backtrace(trace, max_trace);
+    messages = backtrace_symbols(trace, trace_size);
+    for (i=0; i<trace_size; ++i) {
+        printf("[bt] %s\n", messages[i]);
+    }
+    raise (SIGQUIT);
+    signal (SIGSEGV, SIG_DFL);
+    raise (SIGSEGV);
 }
 /*
  *  Check to see if cores can be produced by gridftp; if not, turn them on.
  */
-void
-gridftp_check_core()
+void gridftp_check_core()
 {
     int err;
     struct rlimit rlim;
@@ -189,14 +181,16 @@ lfs_activate(void)
             lfs_statsd_link_port_conv = atoi(lfs_statsd_link_port);
         }
         lfs_statsd_link = statsd_init_with_namespace(lfs_statsd_link_host,
-                                                     lfs_statsd_link_port_conv,
-                                                     statsd_namespace);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Sending log data to statsd %s:%i, namespace %s\n",
-                                lfs_statsd_link_host,
-                                lfs_statsd_link_port_conv,
-                                statsd_namespace);
+                          lfs_statsd_link_port_conv,
+                          statsd_namespace);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                               "Sending log data to statsd %s:%i, namespace %s\n",
+                               lfs_statsd_link_host,
+                               lfs_statsd_link_port_conv,
+                               statsd_namespace);
     } else {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Not logging to statsd. Set $GRIDFTP_LFS_STATSD_HOST to enable\n");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                               "Not logging to statsd. Set $GRIDFTP_LFS_STATSD_HOST to enable\n");
         lfs_statsd_link = NULL;
     }
     //printf("Beginning plugin\n");
@@ -217,9 +211,8 @@ lfs_activate(void)
 bool is_lfs_path(const lfs_handle_t * lfs_handle, const char * path)
 {
     ADVANCE_SLASHES(path);
-    int retval = strncmp(path, lfs_handle->mount_point, lfs_handle->mount_point_len);
-    //globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Checking LFS path with %s %s (%i)\n",  path, lfs_handle->mount_point, retval);
-    //printf("Checking LFS path with %s %s (%i)\n", path, lfs_handle->mount_point, retval);
+    int retval = strncmp(path, lfs_handle->mount_point,
+                         lfs_handle->mount_point_len);
     return retval == 0;
 }
 
@@ -229,9 +222,9 @@ bool is_lfs_path(const lfs_handle_t * lfs_handle, const char * path)
 
 void lfs_queue_init(lfs_queue_t *s, apr_pool_t *mpool)
 {
-   apr_thread_mutex_create(&(s->lock), APR_THREAD_MUTEX_DEFAULT, mpool);
-   apr_thread_cond_create(&(s->cond), mpool);
-   s->stack = new_stack();
+    apr_thread_mutex_create(&(s->lock), APR_THREAD_MUTEX_DEFAULT, mpool);
+    apr_thread_cond_create(&(s->cond), mpool);
+    s->stack = new_stack();
 }
 
 // *************************************************************************
@@ -240,16 +233,20 @@ void lfs_queue_init(lfs_queue_t *s, apr_pool_t *mpool)
 
 void lfs_queue_teardown(lfs_queue_t *s)
 {
-   apr_thread_mutex_destroy(s->lock);
-   apr_thread_cond_destroy(s->cond);
-   free_stack(s->stack, 0);
+    apr_thread_mutex_destroy(s->lock);
+    apr_thread_cond_destroy(s->cond);
+    free_stack(s->stack, 0);
 }
 
 // **************************************************************
 //  lfs_get_checksum - REtreives the files checksum from the LIO backend
 // **************************************************************
 
-globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname, const char * requested_cksm, char**cksum_value) {
+globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle,
+                                 const char * pathname,
+                                 const char * requested_cksm,
+                                 char ** cksum_value)
+{
     globus_result_t rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_get_checksum);
@@ -258,7 +255,8 @@ globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname
     v_size = 2047;
     char * outbuf = (char *) globus_malloc(2048);
     *cksum_value = outbuf;
-    retval = lio_get_attr(lfs_handle->fs, lfs_handle->fs->creds, pathname, NULL, (char *)requested_cksm, (void **)cksum_value, &v_size);
+    retval = lio_get_attr(lfs_handle->fs, lfs_handle->fs->creds, pathname, NULL,
+                          (char *)requested_cksm, (void **)cksum_value, &v_size);
     retval = (OP_STATE_SUCCESS == retval) ? 0 : EREMOTEIO;
     if (retval < 0) {
         return -retval;
@@ -269,7 +267,8 @@ globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname
     }
 
     if (rc == GLOBUS_SUCCESS) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Got checksum (%s:%s) for %s.\n", requested_cksm, *cksum_value, pathname);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Got checksum (%s:%s) for %s.\n",
+                               requested_cksm, *cksum_value, pathname);
     }
 
     return rc;
@@ -279,8 +278,7 @@ globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname
  *  Called when the LFS module is deactivated.
  *  Completely boilerplate
  */
-int
-lfs_deactivate(void)
+int lfs_deactivate(void)
 {
     globus_extension_registry_remove(
         GLOBUS_GFS_DSI_REGISTRY, "lfs");
@@ -292,28 +290,26 @@ lfs_deactivate(void)
     return 0;
 }
 
-static
-void
-lfs_trev(
-    globus_gfs_event_info_t *           event_info,
-    void *                              user_arg
-)
+static void lfs_trev(globus_gfs_event_info_t * event_info,
+                        void * user_arg)
 {
 
-    lfs_handle_t *       lfs_handle;
+    lfs_handle_t * lfs_handle;
     GlobusGFSName(globus_l_gfs_lfs_trev);
 
     lfs_handle = (lfs_handle_t *) user_arg;
     globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Recieved a transfer event.\n");
 
     switch (event_info->type) {
-        case GLOBUS_GFS_EVENT_TRANSFER_ABORT:
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Got an abort request to the LFS client.\n");
-            STATSD_COUNT("trev_abort",1);
-            set_done(lfs_handle, GLOBUS_FAILURE);
-            break;
-        default:
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Got some other transfer event %d.\n", event_info->type);
+    case GLOBUS_GFS_EVENT_TRANSFER_ABORT:
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
+                               "Got an abort request to the LFS client.\n");
+        STATSD_COUNT("trev_abort",1);
+        set_done(lfs_handle, GLOBUS_FAILURE);
+        break;
+    default:
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
+                               "Got some other transfer event %d.\n", event_info->type);
     }
 }
 
@@ -337,15 +333,14 @@ lfs_trev(
  *      GLOBUS_GFS_CMD_SITE_DSI
  ************************************************************************/
 static void
-lfs_command(
-    globus_gfs_operation_t              op,
-    globus_gfs_command_info_t *         cmd_info,
-    void *                              user_arg)
+lfs_command(globus_gfs_operation_t  op,
+            globus_gfs_command_info_t * cmd_info,
+            void * user_arg)
 {
-    globus_result_t                    result;
-    lfs_handle_t *                     lfs_handle;
-    char *                             PathName;
-    char *                             PathName_munged;
+    globus_result_t result;
+    lfs_handle_t * lfs_handle;
+    char * PathName;
+    char * PathName_munged;
     GlobusGFSName(lfs_command);
 
     char * return_value = GLOBUS_NULL;
@@ -356,29 +351,30 @@ lfs_command(
     // Get hadoop path name (ie subtract mount point)
     PathName=cmd_info->pathname;
     PathName_munged = cmd_info->pathname;
-    while (PathName_munged[0] == '/' && PathName_munged[1] == '/')
-    {
+    while (PathName_munged[0] == '/' && PathName_munged[1] == '/') {
         PathName_munged++;
     }
-    if (strncmp(PathName_munged, lfs_handle->mount_point, lfs_handle->mount_point_len)==0) {
+    if (strncmp(PathName_munged, lfs_handle->mount_point,
+                lfs_handle->mount_point_len)==0) {
         PathName_munged += lfs_handle->mount_point_len;
     }
-    while (PathName_munged[0] == '/' && PathName_munged[1] == '/')
-    {
+    while (PathName_munged[0] == '/' && PathName_munged[1] == '/') {
         PathName_munged++;
     }
 
     GlobusGFSErrorSystemError("command", ENOSYS);
     switch (cmd_info->command) {
-    case GLOBUS_GFS_CMD_MKD:
-{
+    case GLOBUS_GFS_CMD_MKD: {
         STATSD_COUNT("mkdir",1);
         errno = 0;
         // if (lfsCreateDirectory(lfs_handle->fs, PathName) == -1) {
         // probably need to config a default umask
         if (is_lfs_path(lfs_handle, PathName)) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Making LFS directory: %s\n", PathName_munged);
-            retval = gop_sync_exec(gop_lio_create_object(lfs_handle->fs, lfs_handle->fs->creds, PathName_munged, OS_OBJECT_DIR, NULL, NULL));
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Making LFS directory: %s\n",
+                                   PathName_munged);
+            retval = gop_sync_exec(gop_lio_create_object(lfs_handle->fs,
+                                   lfs_handle->fs->creds, PathName_munged,
+                                   OS_OBJECT_DIR, NULL, NULL));
             retval = (OP_STATE_SUCCESS == retval) ? 0 : EREMOTEIO;
             errno = -retval;
         } else {
@@ -388,21 +384,23 @@ lfs_command(
             if (errno) {
                 result = GlobusGFSErrorSystemError("mkdir", errno);
             } else {
-                GenericError(lfs_handle, "Unable to create directory (reason unknown)", result);
+                GenericError(lfs_handle,
+                                "Unable to create directory (reason unknown)",
+                                result);
             }
         } else {
             result = GLOBUS_SUCCESS;
         }
-}
-        break;
+    }
+    break;
     case GLOBUS_GFS_CMD_RMD:
         break;
-    case GLOBUS_GFS_CMD_DELE:
-{
+    case GLOBUS_GFS_CMD_DELE: {
         STATSD_COUNT("delete",1);
         errno = 0;
         if (is_lfs_path(lfs_handle, PathName)) {
-            retval = gop_sync_exec(gop_lio_remove_object(lfs_handle->fs, lfs_handle->fs->creds, PathName_munged, NULL, 0));
+            retval = gop_sync_exec(gop_lio_remove_object(lfs_handle->fs,
+                                   lfs_handle->fs->creds, PathName_munged, NULL, 0));
             retval = (OP_STATE_SUCCESS == retval) ? 0 : -EREMOTEIO;
         } else {
             retval = unlink(PathName);
@@ -416,14 +414,13 @@ lfs_command(
         } else {
             result = GLOBUS_SUCCESS;
         }
-}
-        break;
+    }
+    break;
     case GLOBUS_GFS_CMD_RNTO:
         break;
     case GLOBUS_GFS_CMD_RNFR:
         break;
-    case GLOBUS_GFS_CMD_CKSM:
-{
+    case GLOBUS_GFS_CMD_CKSM: {
         STATSD_COUNT("get_checksum",1);
         char * value = NULL;
         if (!is_lfs_path(lfs_handle, PathName)) {
@@ -431,9 +428,10 @@ lfs_command(
         }
 
         if (strcmp("ADLER32", cmd_info->cksm_alg) == 0) {
-            if ((result = lfs_get_checksum(lfs_handle, PathName_munged, "user.gridftp.adler32", &value)) != GLOBUS_SUCCESS) {
-               break;
-           }
+            if ((result = lfs_get_checksum(lfs_handle, PathName_munged,
+                                           "user.gridftp.adler32", &value)) != GLOBUS_SUCCESS) {
+                break;
+            }
         }
 
         if (value == NULL) {
@@ -441,8 +439,8 @@ lfs_command(
             break;
         }
         return_value = value;
-}
-        break;
+    }
+    break;
     case GLOBUS_GFS_CMD_SITE_CHMOD:
         break;
     case GLOBUS_GFS_CMD_SITE_DSI:
@@ -496,13 +494,11 @@ lfs_command(
  *        of the finished_info structure, but it currently does not.
  *        The DSI developer should jsut follow this template for now
  ************************************************************************/
-void
-lfs_start(
-    globus_gfs_operation_t              op,
-    globus_gfs_session_info_t *         session_info)
+void lfs_start(globus_gfs_operation_t op,
+               globus_gfs_session_info_t * session_info)
 {
-    lfs_handle_t*       lfs_handle;
-    globus_gfs_finished_info_t          finished_info;
+    lfs_handle_t * lfs_handle;
+    globus_gfs_finished_info_t finished_info;
     GlobusGFSName(lfs_start);
     globus_result_t rc;
     const char *section = "gridftp";
@@ -515,9 +511,9 @@ lfs_start(
     globus_gridftp_server_get_config_string (NULL, &dsi_config);
 
     if (dsi_config) {
-       globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "DSI config=%s\n", dsi_config);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "DSI config=%s\n", dsi_config);
     } else {
-       globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "DSI config MISSING!\n");
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "DSI config MISSING!\n");
     }
 
     STATSD_COUNT("start",1);
@@ -541,11 +537,14 @@ lfs_start(
         return;
     }
 
-    // ** These are used to interface between globus and LIO to bypass the odd threading model globus uses
-    lfs_handle->globus_lock = (globus_mutex_t *)globus_malloc(sizeof(globus_mutex_t));
+    // ** These are used to interface between globus and LIO to bypass the odd
+    // threading model globus uses
+    lfs_handle->globus_lock = (globus_mutex_t *)globus_malloc(sizeof(
+                                  globus_mutex_t));
     lfs_handle->globus_cond = (globus_cond_t *)globus_malloc(sizeof(globus_cond_t));
 
-    apr_wrapper_start();  // ** Go ahead and start up APR.  I'll need to stop it at the end also.
+    // ** Go ahead and start up APR.  I'll need to stop it at the end also.
+    apr_wrapper_start();
     apr_status_t pool_status = apr_pool_create(&(lfs_handle->mpool), NULL);
     if (pool_status != APR_SUCCESS) {
         MemoryError(lfs_handle, "Unable to allocate an APR threadpool for LFS.", rc);
@@ -554,7 +553,8 @@ lfs_start(
         return;
     }
 
-    apr_thread_mutex_create(&(lfs_handle->lock), APR_THREAD_MUTEX_DEFAULT, lfs_handle->mpool);
+    apr_thread_mutex_create(&(lfs_handle->lock), APR_THREAD_MUTEX_DEFAULT,
+                            lfs_handle->mpool);
     if (!(lfs_handle->lock)) {
         MemoryError(lfs_handle, "Unable to allocate a new mutex for LFS.", rc);
         finished_info.result = rc;
@@ -571,7 +571,8 @@ lfs_start(
 
     // ** Load and parse the config
     inip_file_t *ifd;
-    lfs_handle->lfs_config = (dsi_config == NULL) ? strdup("/etc/lio/lio-gridftp.cfg") : strdup(dsi_config);
+    lfs_handle->lfs_config = (dsi_config == NULL) ?
+                             strdup("/etc/lio/lio-gridftp.cfg") : strdup(dsi_config);
     globus_free(dsi_config);
 
     // ** This will override the gridftp config if env is set
@@ -580,7 +581,8 @@ lfs_start(
         if (lfs_handle->lfs_config) free(lfs_handle->lfs_config);
         lfs_handle->lfs_config = strdup(lfs_config_char);
     }
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Loading LFS config=%s\n", lfs_handle->lfs_config);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Loading LFS config=%s\n",
+                           lfs_handle->lfs_config);
     struct stat dummy;
     if (stat(lfs_handle->lfs_config, &dummy)) {
         SystemError(lfs_handle, "Config file doesn't exist", rc);
@@ -589,35 +591,45 @@ lfs_start(
         return;
     }
     ifd = inip_read(lfs_handle->lfs_config);
-    lfs_handle->mount_point = inip_get_string(ifd, section, "mount_prefix", "Oops!");
+    lfs_handle->mount_point = inip_get_string(ifd, section, "mount_prefix",
+                              "Oops!");
     debug_level = inip_get_string(ifd, section, "log_level", NULL);
     lfs_handle->send_stages = inip_get_integer(ifd, section, "send_stages", 4);
-    lfs_handle->total_buffer_size = inip_get_integer(ifd, section, "max_buffer_size", 100*1024*1024);
-    // set by gridftp....    lfs_handle->buffer_size = inip_get_integer(ifd, section, "buffer_size", 128*1024);
+    lfs_handle->total_buffer_size = inip_get_integer(ifd, section,
+                                                     "max_buffer_size",
+                                                     100*1024*1024);
     lfs_handle->n_buffers = 0;  // ** Calculated and set by the R/W operation
-    lfs_handle->n_cksum_threads = inip_get_integer(ifd, section, "n_cksum_threads", 4);
-    lfs_handle->do_calc_adler32 = inip_get_integer(ifd, section, "do_calc_adler32", 1);
+    lfs_handle->n_cksum_threads = inip_get_integer(ifd, section,
+                                                   "n_cksum_threads",4);
+    lfs_handle->do_calc_adler32 = inip_get_integer(ifd, section,
+                                                   "do_calc_adler32",1);
     load_limit = inip_get_integer(ifd, section, "load_limit", 20);
-    lfs_handle->log_autoremove = inip_get_integer(ifd, section, "log_autoremove", 0);
+    lfs_handle->log_autoremove = inip_get_integer(ifd, section, "log_autoremove",
+                                 0);
     lfs_handle->default_size = inip_get_integer(ifd, section, "default_size", 0);
-    lfs_handle->low_water_fraction = inip_get_double(ifd, section, "low_water_fraction", 0.25);
-    lfs_handle->high_water_fraction = inip_get_double(ifd, section, "high_water_fraction", 0.75);
+    lfs_handle->low_water_fraction = inip_get_double(ifd, section,
+                                     "low_water_fraction", 0.25);
+    lfs_handle->high_water_fraction = inip_get_double(ifd, section,
+                                      "high_water_fraction", 0.75);
     lfs_handle->low_water_flush = 0;  // ** These are set by the recv command
     lfs_handle->high_water_flush = 0;
     allow_control_c = inip_get_integer(ifd, section, "allow_control_c", 0);
-    if ((lfs_handle->low_water_fraction == 0) || 
+    if ((lfs_handle->low_water_fraction == 0) ||
             (lfs_handle->high_water_fraction == 0)) {
-        GenericError(lfs_handle, "Both low_water_fraction and high_water_fraction cannot be zero", rc);
+        GenericError(lfs_handle,
+                     "Both low_water_fraction and high_water_fraction cannot be zero", rc);
         finished_info.result = rc;
         globus_gridftp_server_operation_finished(op, rc, &finished_info);
     }
-    char *lprintf= inip_get_string(ifd, section, "log_fname_printf", "/lio/log/gridftp.log");
+    char *lprintf= inip_get_string(ifd, section, "log_fname_printf",
+                                   "/lio/log/gridftp.log");
     lfs_handle->log_filename = globus_malloc(4096);
     memset(lfs_handle->log_filename, 0, 4096);
     snprintf(lfs_handle->log_filename, 4096, lprintf, getpid());
     free(lprintf);
 
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "mount_prefix=%s\n", lfs_handle->mount_point);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "mount_prefix=%s\n",
+                           lfs_handle->mount_point);
 
 
     // Copy the username from the session_info to the LFS handle.
@@ -655,7 +667,8 @@ lfs_start(
         openlog("GRIDFTP", 0, LOG_LOCAL2);
         lfs_handle->syslog_msg = (char *)globus_malloc(256);
         if (lfs_handle->syslog_msg)
-            snprintf(lfs_handle->syslog_msg, 255, "%s %s %%s %%i %%i", lfs_handle->local_host, lfs_handle->remote_host);
+            snprintf(lfs_handle->syslog_msg, 255, "%s %s %%s %%i %%i",
+                     lfs_handle->local_host, lfs_handle->remote_host);
     }
 
     // Override config file
@@ -677,17 +690,20 @@ lfs_start(
     // ** See if we override the configuration debug level
     char * debug_level_char = getenv("GRIDFTP_LFS_DEBUG_LEVEL");
     if (debug_level_char) {
-       if (debug_level) free(debug_level);
-       debug_level = strdup(debug_level_char);
+        if (debug_level) free(debug_level);
+        debug_level = strdup(debug_level_char);
     }
 
     // fire up the mount point
     int argc = 7;
     char **argv = malloc(sizeof(char *)*argc);
     argv[0] = "lio_gridftp";
-    argv[1] = "-c";    argv[2] = lfs_handle->lfs_config;
-    argv[3] = "-log";  argv[4] = lfs_handle->log_filename;
-    argv[5] = "-d";    argv[6] = debug_level;
+    argv[1] = "-c";
+    argv[2] = lfs_handle->lfs_config;
+    argv[3] = "-log";
+    argv[4] = lfs_handle->log_filename;
+    argv[5] = "-d";
+    argv[6] = debug_level;
     if (debug_level == NULL) argc -= 2;
 
     char **argvp = argv;
@@ -705,13 +721,14 @@ lfs_start(
     lfs_handle->fs = lio_gc;
 
     if (allow_control_c == 1) {  // ** Want to enable ^C for debugging
-       apr_signal(SIGINT, NULL);
-       apr_signal_unblock(SIGINT);
+        apr_signal(SIGINT, NULL);
+        apr_signal_unblock(SIGINT);
     }
 
     lfs_handle->mount_point_len = strlen(lfs_handle->mount_point);
 
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Checking current load on the server.\n");
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                           "Checking current load on the server.\n");
     // Stall stall stall!
     int fd = open("/proc/loadavg", O_RDONLY);
     int bufsize = 256, nbytes=-1;
@@ -731,9 +748,11 @@ lfs_start(
         buf_ptr = buf;
         token = strsep(&buf_ptr, " ");
         load = strtod(token, NULL);
-        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Detected system load %.2f.\n", load);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Detected system load %.2f.\n",
+                               load);
         if ((load >= load_limit) && (load < 4000)) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Preventing gridftp transfer startup due to system load of %.2f.\n", load);
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                                   "Preventing gridftp transfer startup due to system load of %.2f.\n", load);
             sleep(5);
         } else {
             break;
@@ -743,7 +762,7 @@ lfs_start(
     }
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-        "Connected to LFS.\n");
+                           "Connected to LFS.\n");
 
     if (!lfs_handle->fs) {
         finished_info.result = GLOBUS_FAILURE;
@@ -764,22 +783,19 @@ lfs_start(
  *  -------
  *  This is called when a session ends, ie client quits or disconnects.
  ************************************************************************/
-void
-lfs_destroy_gridftp(
-    void *                              user_arg)
+void lfs_destroy_gridftp(void * user_arg)
 {
     lfs_handle_t *       lfs_handle;
     lfs_handle = (lfs_handle_t *) user_arg;
     STATSD_COUNT("destroy",1);
-    //printf("Destroying gridftp\n");
     if (lfs_handle) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroying the LFS connection.\n");
-        //printf("The handle is %p\n", (void*)lfs_handle);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                                "Destroying the LFS connection.\n");
         if (lfs_handle->fs) {
             lfs_handle->fs = NULL;
             lio_shutdown();
-            apr_wrapper_stop();  // ** Let the wrapper know we don't need APR anymore either.
-
+            // ** Let the wrapper know we don't need APR anymore either.
+            apr_wrapper_stop();
             if (lfs_handle->log_autoremove) unlink(lfs_handle->log_filename);
         }
 
@@ -810,9 +826,7 @@ lfs_destroy_gridftp(
  *  -------
  *  Check to see if a lfs_handle is already done.
  ************************************************************************/
-inline globus_bool_t
-is_done(
-    lfs_handle_t *lfs_handle)
+inline globus_bool_t is_done(lfs_handle_t *lfs_handle)
 {
     return lfs_handle->done > 0;
 }
@@ -822,9 +836,7 @@ is_done(
  *  -------------
  *  Check to see if a lfs_handle is already close-done.
  ************************************************************************/
-inline globus_bool_t
-is_close_done(
-    lfs_handle_t *lfs_handle)
+inline globus_bool_t is_close_done(lfs_handle_t *lfs_handle)
 {
     return lfs_handle->done == 2;
 }
@@ -836,9 +848,7 @@ is_close_done(
  *  If the handle is already done with an error, this is a no-op.
  *  If the handle is in a success state and gets a failure, we record it.
  ************************************************************************/
-inline void
-set_done(
-    lfs_handle_t *lfs_handle, globus_result_t rc)
+inline void set_done(lfs_handle_t *lfs_handle, globus_result_t rc)
 {
     // Ignore already-done handles.
     if (is_done(lfs_handle) && (lfs_handle->done_status != GLOBUS_SUCCESS)) {
