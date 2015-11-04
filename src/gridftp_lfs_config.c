@@ -19,7 +19,6 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
     const char * error = NULL;
     const char * section = "gridftp";
     char * dsi_config;
-    char * debug_level = NULL;
     int load_limit = 100;
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Loading LFS config.\n");
@@ -70,14 +69,13 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
     if (lfs_config_char != NULL) {
         if (h->lfs_config) free(h->lfs_config);
         h->lfs_config = strdup(lfs_config_char);
-    } else { 
+    } else {
         h->lfs_config = (dsi_config == NULL) ?
                                     strdup("/etc/lio/lio-gridftp.cfg") :
                                     strdup(dsi_config);
     }
     globus_free(dsi_config);
 
-    
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Loading LFS config=%s\n",
                            h->lfs_config);
     struct stat dummy;
@@ -86,7 +84,11 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
         goto cleanup;
     }
     ifd = inip_read(h->lfs_config);
-    debug_level = inip_get_string(ifd, section, "log_level", NULL);
+    if (ifd == NULL) {
+        error = "ERROR opening config file!";
+        goto cleanup;
+    }
+
     if (inip_get_integer(ifd, section, "allow_control_c", 0) == 1) {
         apr_signal(SIGINT, NULL);
         apr_signal_unblock(SIGINT);
@@ -96,7 +98,7 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
     //
     // Configure handle using ini
     //
-    h->debug_level = inip_get_string(ifd, section, "debug_level", NULL);
+    h->debug_level = inip_get_string(ifd, section, "log_level", "0");
     h->default_size = inip_get_integer(ifd, section, "default_size", 0);
     h->do_calc_adler32 = inip_get_integer(ifd, section, "do_calc_adler32",1);
     h->high_water_fraction = inip_get_double(ifd, section, "high_water_fraction", 0.75);
@@ -180,7 +182,7 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
         h->mount_point = strdup(mount_point_char);
     }
 
-    char * debug_level_char = getenv("GRIDFTP_LFS_DEBUG_LEVEL");
+    char * debug_level_char = getenv("GRIDFTP_LFS_LOG_LEVEL");
     if (debug_level_char != NULL) {
         if (h->debug_level) free(h->debug_level);
         h->debug_level = strdup(debug_level_char);
