@@ -5,7 +5,9 @@
 */
 #include <sys/stat.h>
 #include <sys/resource.h>
+#ifndef __APPLE__
 #include <sys/prctl.h>
+#endif
 #include <syslog.h>
 #include <sys/syscall.h>
 #include <sys/stat.h>
@@ -105,6 +107,7 @@ void segv_handler (int sig)
  */
 void gridftp_check_core()
 {
+#ifndef __APPLE__
     int err;
     struct rlimit rlim;
 
@@ -131,6 +134,7 @@ void gridftp_check_core()
     if (sigerr == SIG_ERR) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Unable to set core handler.\n");
     }
+#endif
 }
 
 /*
