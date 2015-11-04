@@ -39,7 +39,7 @@ int load_lfs(lfs_handle_t * h, char ** errstr)
     h->fs = lio_gc;
     return 1;
 cleanup:
-    handle_errstr(errstr, error);   
+    handle_errstr(errstr, error);
     return 0;
 }
 
@@ -152,6 +152,8 @@ void lfs_destroy_gridftp(void * user_arg)
             free(lfs_handle->mount_point);
         if (lfs_handle->lfs_config)
             free(lfs_handle->lfs_config);
+        if (lfs_handle->debug_level)
+            free(lfs_handle->debug_level);
 
         globus_free(lfs_handle);
     }
