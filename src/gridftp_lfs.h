@@ -93,6 +93,7 @@ struct globus_l_gfs_lfs_handle_s {
     atomic_int_t          io_count;             // ** Number of data blocks containing data
     char                  adler32_human[2*sizeof(uLong)+1];  // ** Human readable version of adler32 checksum
     char *                data_buffer;          // ** Pointer to athe actual large data buffer which gets parcelled out in buffers
+    char *                debug_level;
     char *                expected_checksum;    // ** Expected checksum from GridFTP
     char *                expected_checksum_alg;// ** Expected checksum algorithm from GridFTP
     char *                lfs_config;           // ** LIO config file
@@ -127,6 +128,7 @@ struct globus_l_gfs_lfs_handle_s {
     int                   low_water_flush;      // ** Need to get the used buffer count below this when flushing
     int                   n_buffers;            // ** Total number of buffers
     int                   n_cksum_threads;      // ** Number of checksum threads
+    int                   load_limit;
     int                   send_stages;          // ** Number of read stages
     lfs_buffer_t *        buffers;              // ** Array of write buffers
     lfs_queue_t           backend_stack;        // ** backend write/read buffer stack
@@ -226,11 +228,21 @@ globus_result_t
             const char *       pathname,
             const char *       requested_cksm,
             char **            cksm_value);
+void lfs_trev(globus_gfs_event_info_t *, void *);
+inline void set_done(lfs_handle_t *, globus_result_t);
+int  lfs_activate(void);
+int  lfs_deactivate(void);
+void lfs_command(globus_gfs_operation_t, globus_gfs_command_info_t *, void *);
+void lfs_start(globus_gfs_operation_t, globus_gfs_session_info_t *);
 
+void lfs_destroy_gridftp(void * user_arg);
+
+void lfs_start(globus_gfs_operation_t op,
+                globus_gfs_session_info_t * session_info);
+lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
+                                       char ** errstr);
+void handle_errstr(char ** errstr, char * error);
 #pragma GCC visibility pop
-
-// ** This is for debugging purposes only
-extern lfs_handle_t *global_lfs_handle;
 
 #ifdef __cplusplus
 }
