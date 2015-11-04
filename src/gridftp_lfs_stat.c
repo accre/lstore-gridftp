@@ -240,7 +240,7 @@ lfs_stat_gridftp(
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Falling back to POSIX stat, file not in LFS\n");
         return lfs_stat_gridftp_posix(op, stat_info, user_arg);
     } else {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Doing stats of %s", PathName);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Doing stats of %s\n", PathName);
     }
     while (PathName[0] == '/' && PathName[1] == '/')
     {
@@ -259,7 +259,7 @@ lfs_stat_gridftp(
     // ** If we made it here then it's a file in LFS
     struct stat fileInfo;
     struct stat *stat;
-    char *readlink;
+    char *readlink = NULL;
     int retval;
 
     retval = lio_stat(lfs_handle->fs, lfs_handle->fs->creds, PathName, &fileInfo, lfs_handle->mount_point, &readlink);
@@ -505,7 +505,7 @@ globus_l_gfs_file_copy_stat(
         }
         stat_object->name = strdup(real_filename);
     }
-    if(symlink_target && *symlink_target)
+    if(symlink_target && (strlen(symlink_target) != 0))
     {
         stat_object->symlink_target = strdup(symlink_target);
     }

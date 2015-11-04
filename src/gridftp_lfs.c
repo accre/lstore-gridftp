@@ -258,7 +258,7 @@ globus_result_t lfs_get_checksum(lfs_handle_t *lfs_handle, const char * pathname
     v_size = 2047;
     char * outbuf = (char *) globus_malloc(2048);
     *cksum_value = outbuf;
-    retval = lio_get_attr(lfs_handle->fs, lfs_handle->fs->creds, lfs_handle->pathname_munged, NULL, (char *)requested_cksm, (void **)cksum_value, &v_size);
+    retval = lio_get_attr(lfs_handle->fs, lfs_handle->fs->creds, pathname, NULL, (char *)requested_cksm, (void **)cksum_value, &v_size);
     retval = (OP_STATE_SUCCESS == retval) ? 0 : EREMOTEIO;
     if (retval < 0) {
         return -retval;
@@ -580,7 +580,14 @@ lfs_start(
         if (lfs_handle->lfs_config) free(lfs_handle->lfs_config);
         lfs_handle->lfs_config = strdup(lfs_config_char);
     }
-
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Loading LFS config=%s\n", lfs_handle->lfs_config);
+    struct stat dummy;
+    if (stat(lfs_handle->lfs_config, &dummy)) {
+        SystemError(lfs_handle, "Config file doesn't exist", rc);
+        finished_info.result = errno;
+        globus_gridftp_server_operation_finished(op, errno, &finished_info);
+        return;
+    }
     ifd = inip_read(lfs_handle->lfs_config);
     lfs_handle->mount_point = inip_get_string(ifd, section, "mount_prefix", "Oops!");
     debug_level = inip_get_string(ifd, section, "log_level", NULL);
@@ -643,7 +650,7 @@ lfs_start(
     if (syslog_host_char == NULL) {
         lfs_handle->syslog_host = NULL;
     } else {
-        lfs_handle->syslog_host = syslog_host_char;
+        lfs_handle->syslog_host = stdrup(syslog_host_char);
         lfs_handle->remote_host = session_info->host_id;
         openlog("GRIDFTP", 0, LOG_LOCAL2);
         lfs_handle->syslog_msg = (char *)globus_malloc(256);
@@ -663,14 +670,15 @@ lfs_start(
     // Override config file
     char * mount_point_char = getenv("GRIDFTP_LFS_MOUNT_POINT");
     if (mount_point_char != NULL) {
-        lfs_handle->mount_point = mount_point_char;
+        if (lfs_handle->mount_point) free(lfs_handle->mount_point);
+        lfs_handle->mount_point = strdup(mount_point_char);
     }
 
     // ** See if we override the configuration debug level
     char * debug_level_char = getenv("GRIDFTP_LFS_DEBUG_LEVEL");
     if (debug_level_char) {
        if (debug_level) free(debug_level);
-       debug_level = debug_level_char;
+       debug_level = strdup(debug_level_char);
     }
 
     // fire up the mount point
@@ -682,18 +690,11 @@ lfs_start(
     argv[5] = "-d";    argv[6] = debug_level;
     if (debug_level == NULL) argc -= 2;
 
-    struct stat dummy;
-    if (stat(lfs_handle->lfs_config, &dummy)) {
-        SystemError(lfs_handle, "Config file doesn't exist", rc);
-        finished_info.result = errno;
-        globus_gridftp_server_operation_finished(op, errno, &finished_info);
-        return;
-    }
     char **argvp = argv;
     lio_init(&argc, &argvp);
     free(argv);
     free(argvp);
-    free(debug_level);
+    if (debug_level) free(debug_level);
 
     if (!lio_gc) {
         MemoryError(lfs_handle, "Unable to allocate a new LFS FileSystem.", rc);
