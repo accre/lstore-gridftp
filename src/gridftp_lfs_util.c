@@ -96,5 +96,5 @@ void handle_errstr(char ** errstr, char * error)
     } else if (*errstr == NULL) {
         free(*errstr);
     }
-    errstr = strdup(error);
+    *errstr = strdup(error);
 }

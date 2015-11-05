@@ -12,23 +12,6 @@
 #include "stack.h"
 #include "apr_wrapper.h"
 
-#define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
-
-
-typedef struct {
-    Stack_t stack;
-    ex_off_t lo;
-    ex_off_t hi;
-    ex_off_t len;
-    uLong adler32;
-} lfs_cluster_t;
-
-typedef struct {
-    ex_off_t lo;
-    ex_off_t hi;
-    uLong adler32;
-} lfs_interval_t;
-
 // Forward declarations of local functions
 static void
 lfs_handle_write_op(
@@ -41,146 +24,272 @@ lfs_handle_write_op(
     void *                              user_arg);
 
 static globus_result_t lfs_write_finish_transfer(lfs_handle_t *lfs_handle);
+globus_result_t prepare_handle(lfs_handle_t *lfs_handle);
+void lfs_initialize_writers(lfs_handle_t *lfs_handle);
+void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data);
 
-// *************************************************************************
-//  human_readable_adler32 - Converts the adler32 number into a human readable format
-// *************************************************************************
-
-static void human_readable_adler32(char *adler32_human, uLong adler32)
+//
+//  lfs_recv - Called when the client requests that a file be transfered to the
+//  server.
+//
+void lfs_recv(globus_gfs_operation_t op, 
+              globus_gfs_transfer_info_t * transfer_info,
+              void * user_arg)
 {
-    unsigned int i;
-    unsigned char * adler32_char = (unsigned char*)&adler32;
-    char * adler32_ptr = (char *)adler32_human;
-    for (i = 0; i < 4; i++) {
-        sprintf(adler32_ptr, "%02x", adler32_char[sizeof(ulong)-4-1-i]);
-        adler32_ptr++;
-        adler32_ptr++;
+    lfs_handle_t *        lfs_handle;
+    globus_result_t       rc = GLOBUS_SUCCESS;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Receiving a file: %s\n",
+                           transfer_info->pathname);
+    GlobusGFSName(lfs_recv);
+
+
+    lfs_handle = (lfs_handle_t *) user_arg;
+    lfs_handle->op = op;
+    lfs_handle->done_status = GLOBUS_SUCCESS;
+
+    char * PathName=transfer_info->pathname;
+    lfs_handle->pathname = PathName;
+    lfs_handle->is_lio = is_lfs_path(lfs_handle, PathName);
+    if (lfs_handle->is_lio) {
+        lfs_handle->pathname_munged = PathName;
+        while (lfs_handle->pathname_munged[0] == '/'
+                && lfs_handle->pathname_munged[1] == '/') {
+            lfs_handle->pathname_munged++;
+        }
+        if (strncmp(lfs_handle->pathname_munged, lfs_handle->mount_point,
+                    lfs_handle->mount_point_len)==0) {
+            lfs_handle->pathname_munged += lfs_handle->mount_point_len;
+        }
+        while (lfs_handle->pathname_munged[0] == '/'
+                && lfs_handle->pathname_munged[1] == '/') {
+            lfs_handle->pathname_munged++;
+        }
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                               "Munging path. Input: %s Mount: %s Munged: %s\n",
+                               transfer_info->pathname,
+                               lfs_handle->mount_point,
+                               lfs_handle->pathname_munged);
+    } else {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                               "Path not in LFS, opening regularly: %s\n",
+                               transfer_info->pathname);
     }
-    adler32_ptr = '\0';
-}
 
-// *************************************************************************
-// lfs_cluster_sort - Sort the clusters in descending order.
-//    This uses a simple insertion sort.
-// *************************************************************************
+    if ((rc = prepare_handle(lfs_handle)) != GLOBUS_SUCCESS) goto cleanup;
 
-void lfs_cluster_sort(int *cluster_order, ex_off_t *cluster_weight,
-                      int n_clusters)
-{
-    int i, j;
-    ex_off_t weight;
-
-    for (i=0; i<n_clusters; i++) {
-        log_printf(5, "START cluster=%d weight=" XOT "\n", i, cluster_weight[i]);
+    if (transfer_info->expected_checksum) {
+        lfs_handle->expected_checksum =
+            globus_libc_strdup(transfer_info->expected_checksum);
     }
 
-    cluster_order[0] = 0;
-    for (i=1; i<n_clusters; i++) {
-        cluster_order[i] = i;
-        weight = cluster_weight[i];
-        j = i;
-
-        while ((j>0) && (cluster_weight[cluster_order[j-1]] < weight)) {
-            cluster_order[j] = cluster_order[j-1];
-            j--;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Open file %s.\n",
+                           lfs_handle->pathname);
+    int retval;
+    if (lfs_handle->is_lio) {
+        lfs_handle->fd = NULL;
+        retval = gop_sync_exec(gop_lio_open_object(lfs_handle->fs,
+                               lfs_handle->fs->creds,
+                               lfs_handle->pathname_munged,
+                               lio_fopen_flags("w"), NULL,
+                               &(lfs_handle->fd), 60));
+        if (retval != OP_STATE_SUCCESS) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "ERROR opening the file!\n");
+            log_printf(1, "ERROR opening the file!\n");
+            rc = GLOBUS_FAILURE;
+            goto cleanup;
         }
 
-        cluster_order[j] = i;
-    }
+        retval = 0;
+        if (lfs_handle->fd == NULL) {
+            retval = lio_exists(lfs_handle->fs, lfs_handle->fs->creds,
+                                lfs_handle->pathname_munged);
 
-    for (i=0; i<n_clusters; i++) {
-        j=cluster_order[i];
-        log_printf(5, "END sort=%d cluster=%d weight=" XOT "\n", i, j,
-                   cluster_weight[j]);
-    }
-}
-
-// *************************************************************************
-// lfs_cluster - Cluster the given buffers
-// *************************************************************************
-
-void lfs_cluster_weight(interval_skiplist_t *written_intervals,
-                        lfs_cluster_t *cluster, ex_off_t *cluster_weight,
-                        int n_clusters)
-{
-    interval_skiplist_iter_t it;
-    ex_off_t lo, hi;
-    lfs_cluster_t *c;
-    ex_off_t *interval, weight;
-    int i;
-
-    for (i=0; i<n_clusters; i++) {
-        c = &(cluster[i]);
-        lo = c->lo - 1;
-        hi = c->hi + 1;
-        it = iter_search_interval_skiplist(written_intervals,
-                                            (skiplist_key_t *)&lo,
-                                            (skiplist_key_t *)&hi);
-        weight = c->hi - c->lo + 1;
-        log_printf(5, "i=%d lo=" XOT " hi=" XOT " weight=" XOT "\n",
-                    i, c->lo, c->hi, weight);
-        while ((interval = next_interval_skiplist(&it)) != NULL) {
-            weight += interval[1] - interval[0] + 1;
-            log_printf(5, "   i=%d ilo=" XOT " ihi=" XOT " weight=" XOT "\n", i,
-                       interval[0], interval[1], weight);
+            if (retval & OS_OBJECT_DIR) {
+                retval = EISDIR;
+                rc = GLOBUS_FAILURE;
+                GenericError(lfs_handle, "Destination path is a directory; cannot overwrite.",
+                             retval);
+                goto cleanup;
+            }
         }
-        cluster_weight[i] = weight;
+
+        if (lfs_handle->syslog_host != NULL) {
+            syslog(LOG_INFO, "lfs_open: ret: %i path: %s", retval,
+                   lfs_handle->pathname_munged);
+        }
+
+        if (transfer_info->alloc_size > 0) {
+            // hopefully this is the size we want to have the file be later
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                                   "Extending to %i bytes via client request\n", transfer_info->alloc_size);
+            gop_sync_exec(gop_lio_truncate(lfs_handle->fd, -transfer_info->alloc_size));
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, " ... complete\n",
+                                   transfer_info->alloc_size);
+        } else if (lfs_handle->default_size > 0) {
+            log_printf(5, "Truncated to default size=" XOT "\n", lfs_handle->default_size);
+            gop_sync_exec(gop_lio_truncate(lfs_handle->fd, -lfs_handle->default_size));
+        }
+    } else {
+        retval = open(PathName,  O_WRONLY | O_CREAT,
+                      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP );
+        if (retval > 0) {
+            lfs_handle->fd_posix = retval;
+        } else {
+            SystemError(lfs_handle, "opening file; POSIX error", rc);
+            rc = GLOBUS_FAILURE;
+            goto cleanup;
+        }
+    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                           "Successfully opened file %s for user %s.\n", lfs_handle->pathname,
+                           lfs_handle->username);
+
+    globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
+    lfs_initialize_writers(lfs_handle);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning to read file.\n");
+
+cleanup:
+    if (rc != GLOBUS_SUCCESS) {
+        lfs_handle->done_status = rc;
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                               "Aborted read before transfer began\n");
+        globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
     }
 }
 
-// *************************************************************************
-// lfs_cluster - Cluster the given buffers
-// *************************************************************************
-
-void lfs_cluster(list_t *sorted_buffers, lfs_cluster_t *cluster, 
-                    int *n_clusters)
+//
+// lfs_handle_write_op - Called when globus has data to write
+//
+static void lfs_handle_write_op(globus_gfs_operation_t op,
+                                __attribute__((unused)) globus_result_t result,
+                                __attribute__((unused)) globus_byte_t * buffer,
+                                globus_size_t nbytes,
+                                globus_off_t offset,
+                                globus_bool_t eof,
+                                void * user_arg)
 {
-    int n;
-    list_iter_t it;
-    ex_off_t *off;
-    ex_off_t next_off;
+    GlobusGFSName(lfs_handle_write_op);
+
+    Stack_ele_t *ele = (Stack_ele_t *)user_arg;
+    lfs_buffer_t *buf = (lfs_buffer_t *)get_stack_ele_data(ele);
+    lfs_handle_t *lfs_handle = buf->lfs_handle;
+
+    // ** Update the buffer
+    buf->offset = offset;
+    buf->nbytes = nbytes;
+    buf->eof = eof;
+
+    log_printf(5, "offset=" XOT " nbytes=" XOT " eof=%d\n", buf->offset,
+               buf->nbytes, eof);
+
+    globus_gridftp_server_update_bytes_written(op, offset, nbytes);
+
+    apr_thread_mutex_lock(lfs_handle->cksum_stack.lock);
+    push_link(lfs_handle->cksum_stack.stack, ele);
+    apr_thread_cond_signal(lfs_handle->cksum_stack.cond);
+    apr_thread_mutex_unlock(lfs_handle->cksum_stack.lock);
+}
+
+
+//
+//  lfs_gridftp_finish_transfer - Called by gridftp to close the file
+//
+static globus_result_t lfs_write_finish_transfer(lfs_handle_t *lfs_handle)
+{
+    STATSD_COUNT("lfs_gridftp_finish_transfer",1);
+    apr_status_t value;
+    int n_cksum, i;
+    lfs_queue_t *q;
+    Stack_t *stack;
     Stack_ele_t *ele;
-    lfs_cluster_t *c;
-    lfs_buffer_t *buf, *prev_buf;
+    globus_result_t retval;
+    GlobusGFSName(close_and_clean);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
+                           "Trying to close file in LFS; zero outstanding blocks.\n");
 
-    n = 0;
-    it = list_iter_search(sorted_buffers, NULL, 0);
-    if (list_next(&it, (list_key_t **)&off, (list_data_t **)&ele) != 0) {
-        *n_clusters = 0;
-        return;
+    // ** Shutdown the cksum threads
+    stack = new_stack();
+    n_cksum = lfs_handle->n_cksum_threads;
+    q = &(lfs_handle->cksum_stack);
+    apr_thread_mutex_lock(q->lock);
+    for (i=0; i<n_cksum; i++) {
+        push(stack, NULL);
+        ele = pop_link(stack);  // ** Create the dummy stack element to dump
+        push_link(q->stack, ele);
     }
+    apr_thread_cond_broadcast(q->cond);
+    apr_thread_mutex_unlock(q->lock);
+    free(stack);
 
-    buf = get_stack_ele_data(ele);
-    next_off = buf->offset + buf->nbytes;
-    prev_buf = buf;
-    c = &(cluster[n]);
-    c->lo = buf->offset;
-    push_link(&(c->stack), ele);
-    move_to_bottom(&(c->stack));
-    log_printf(5, "START offset=" XOT " next=" XOT "\n", buf->offset, next_off);
-    while (list_next(&it, (list_key_t **)&off, (list_data_t **)&ele) == 0) {
-        buf = get_stack_ele_data(ele);
-        if (next_off != buf->offset) { // ** Got a new cluster
-            c->hi = prev_buf->offset + prev_buf->nbytes - 1;
-            c->len = c->hi - c->lo + 1;
-            n++;
-            c = &(cluster[n]);
-            c->lo = buf->offset;
-            move_to_bottom(&(c->stack));
+    // ** Wait for them to complete
+    apr_thread_mutex_lock(lfs_handle->lock);
+    while (lfs_handle->n_cksum_threads > 0) {
+        apr_thread_mutex_lock(q->lock);
+        apr_thread_cond_broadcast(q->cond);
+        apr_thread_mutex_unlock(q->lock);
+
+        apr_thread_cond_wait(lfs_handle->cond, lfs_handle->lock);
+    }
+    apr_thread_mutex_unlock(lfs_handle->lock);
+
+    // ** And reap them
+    for (i=0; i<n_cksum; i++) {
+        apr_thread_join(&value, lfs_handle->cksum_thread[i]);
+    }
+    free(lfs_handle->cksum_thread);
+
+    // ** Now do the same for the writer thread. It triggers the exit so just reap it
+    apr_thread_join(&value, lfs_handle->backend_thread);
+
+    lfs_queue_teardown(&(lfs_handle->cksum_stack));
+    lfs_queue_teardown(&(lfs_handle->backend_stack));
+
+    // ** Now we can safely close everything
+    if (lfs_handle->is_lio) {
+        retval = gop_sync_exec(gop_lio_close_object(lfs_handle->fd));
+        retval = (OP_STATE_SUCCESS == retval) ? 0 : EIO;
+        if (retval != 0) {
+            STATSD_COUNT("lfs_write_close_failure", 1);
+            GenericError(lfs_handle, "Failed to close file in LFS.", retval);
+            lfs_handle->fd = NULL;
+            lfs_handle->done_status = GLOBUS_FAILURE;
+        }
+        if ((lfs_handle->syslog_host != NULL)) {
+            syslog(LOG_INFO, "lfs_close: ret: %i path: %s", retval,
+                   lfs_handle->pathname_munged);
         }
 
-        next_off = buf->offset + buf->nbytes;
-        log_printf(5, "offset=" XOT " next=" XOT " n_cluster=%d\n", buf->offset,
-                   next_off, n);
-        prev_buf = buf;
-        insert_link_below(&(c->stack), ele);
+        // ** Also update the LFS adler32 attribute
+        if (lfs_handle->do_calc_adler32 == 1) {
+            retval = lio_set_attr(lfs_handle->fs, lfs_handle->fs->creds,
+                                  lfs_handle->pathname_munged, NULL, "user.gridftp.adler32",
+                                  lfs_handle->adler32_human, strlen((char *)lfs_handle->adler32_human));
+            if (retval != OP_STATE_SUCCESS) lfs_handle->done_status = GLOBUS_FAILURE;
+            if (lfs_handle->expected_checksum != NULL) {
+                if (strcmp(lfs_handle->adler32_human, lfs_handle->expected_checksum) != 0) {
+                    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
+                                           "checksum mismatch! calculated=%s expected=%s\n", lfs_handle->adler32_human,
+                                           lfs_handle->expected_checksum);
+                    log_printf(1, "checksum mismatch! calculated=%s expected=%s\n",
+                               lfs_handle->adler32_human, lfs_handle->expected_checksum);
+                    lfs_handle->done_status = GLOBUS_FAILURE;
+                }
+            }
+        }
+    } else {
+        if ((retval = close(lfs_handle->fd_posix)) != 0) {
+            GenericError(lfs_handle, "Failed to close file in POSIX.", retval);
+            lfs_handle->fd_posix = 0;
+            lfs_handle->done_status = GLOBUS_FAILURE;
+        }
     }
 
-    c->hi = prev_buf->offset + prev_buf->nbytes - 1;
-    c->len = c->hi - c->lo + 1;
-    n++;
+    free(lfs_handle->pathname_munged);
+    free(lfs_handle->data_buffer);
+    free(lfs_handle->buffers);
+    apr_pool_destroy(lfs_handle->mpool);
 
-    *n_clusters = n;
+    return lfs_handle->done_status;
 }
 
 
@@ -188,7 +297,7 @@ void lfs_cluster(list_t *sorted_buffers, lfs_cluster_t *cluster,
 // lfs_write_thread - Thread task for doing aggregation and dumping to the backend
 // *************************************************************************
 
-void *lfs_write_thread(apr_thread_t *th, void *data)
+void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
 {
     lfs_handle_t *lfs_handle = (lfs_handle_t *)data;
     apr_thread_cond_t *cond = lfs_handle->backend_stack.cond;
@@ -196,7 +305,7 @@ void *lfs_write_thread(apr_thread_t *th, void *data)
     Stack_ele_t *ele;
     lfs_buffer_t *buf;
     apr_time_t write_timer;
-    int finished, n_holding, i, n_clusters, *cluster_order, n, n_to_process;
+    int finished, i, n_clusters, *cluster_order, n, n_to_process, n_holding;
     ex_off_t *cluster_weights;
     int n_iov, n_ex, rc, n_start, eof;
     lfs_interval_t *idroplo, *idrophi;
@@ -288,7 +397,7 @@ void *lfs_write_thread(apr_thread_t *th, void *data)
             atomic_dec(lfs_handle->inflight_count);
         }
         if (buf->eof == 1) eof = 1;
-        if ((atomic_get(lfs_handle->inflight_count) == n_holding)
+        if ((atomic_get(lfs_handle->inflight_count) == (unsigned int) n_holding)
                 && (eof == 1)) finished = 1;
 
         // ** See if it's time to flush the buffers
@@ -539,67 +648,6 @@ void *lfs_write_thread(apr_thread_t *th, void *data)
 
 
 // *************************************************************************
-// lfs_cksum_thread - Thread task for doing adler32 calculations on incoming data blocks
-// *************************************************************************
-
-void *lfs_cksum_thread(apr_thread_t *th, void *data)
-{
-    lfs_handle_t *lfs_handle = (lfs_handle_t *)data;
-    Stack_t *stack = lfs_handle->cksum_stack.stack;
-    apr_thread_cond_t *cond = lfs_handle->cksum_stack.cond;
-    apr_thread_mutex_t *lock = lfs_handle->cksum_stack.lock;
-    lfs_queue_t *writer = &(lfs_handle->backend_stack);
-    Stack_ele_t *ele;
-    lfs_buffer_t *buf;
-    int finished;
-
-    finished = 0;
-    while (finished == 0) {
-        // ** Get the next block to process
-        apr_thread_mutex_lock(lock);
-        while ((ele = pop_link(stack)) == NULL) {
-            if (ele == NULL) {
-                apr_thread_cond_wait(cond, lock);  // ** Nothing to do so wait
-                continue;  // ** Try again
-            }
-        }
-        apr_thread_mutex_unlock(lock);
-
-        // ** Make sure it's valid data and not an exit sentinel
-        buf = get_stack_ele_data(ele);
-        log_printf(1, "processing.  ptr=%p\n", buf);
-        if (buf == NULL) {  // ** This tells us to kick out
-            finished = 1;
-            free(ele);
-            break;
-        }
-
-        // ** If we made it here we have a block to process
-        if ((buf->nbytes > 0) && (lfs_handle->do_calc_adler32 == 1)) {
-            buf->adler32 = adler32(0L, Z_NULL, 0);
-            buf->adler32 = adler32(buf->adler32, (const Bytef *)buf->buffer, buf->nbytes);
-        } else {
-            buf->adler32 = 0;
-        }
-
-        // ** Now pass it on to the writer thread
-        apr_thread_mutex_lock(writer->lock);
-        push_link(writer->stack, ele);
-        apr_thread_cond_signal(writer->cond);
-        apr_thread_mutex_unlock(writer->lock);
-    }
-    apr_thread_mutex_unlock(lock);
-
-    // ** Notify them I'm finished
-    apr_thread_mutex_lock(lfs_handle->lock);
-    lfs_handle->n_cksum_threads--;
-    apr_thread_cond_signal(lfs_handle->cond);
-    apr_thread_mutex_unlock(lfs_handle->lock);
-
-    return(NULL);
-}
-
-// *************************************************************************
 //   lfs_initialize_writers - Sets up all the LFS bits for writing to a file
 // *************************************************************************
 
@@ -636,109 +684,6 @@ void lfs_initialize_writers(lfs_handle_t *lfs_handle)
         thread_create_assert(&(lfs_handle->cksum_thread[i]), NULL, lfs_cksum_thread,
                              (void *)lfs_handle, lfs_handle->mpool);
     }
-}
-
-/*************************************************************************
- *  lfs_gridftp_finish_transfer
- *  --------------
- *  Close the LFS file and updates the appropriate attributes
- *************************************************************************/
-static globus_result_t lfs_write_finish_transfer(lfs_handle_t *lfs_handle)
-{
-    STATSD_COUNT("lfs_gridftp_finish_transfer",1);
-    apr_status_t value;
-    int n_cksum, i;
-    lfs_queue_t *q;
-    Stack_t *stack;
-    Stack_ele_t *ele;
-    globus_result_t retval;
-    GlobusGFSName(close_and_clean);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                           "Trying to close file in LFS; zero outstanding blocks.\n");
-
-    // ** Shutdown the cksum threads
-    stack = new_stack();
-    n_cksum = lfs_handle->n_cksum_threads;
-    q = &(lfs_handle->cksum_stack);
-    apr_thread_mutex_lock(q->lock);
-    for (i=0; i<n_cksum; i++) {
-        push(stack, NULL);
-        ele = pop_link(stack);  // ** Create the dummy stack element to dump
-        push_link(q->stack, ele);
-    }
-    apr_thread_cond_broadcast(q->cond);
-    apr_thread_mutex_unlock(q->lock);
-    free(stack);
-
-    // ** Wait for them to complete
-    apr_thread_mutex_lock(lfs_handle->lock);
-    while (lfs_handle->n_cksum_threads > 0) {
-        apr_thread_mutex_lock(q->lock);
-        apr_thread_cond_broadcast(q->cond);
-        apr_thread_mutex_unlock(q->lock);
-
-        apr_thread_cond_wait(lfs_handle->cond, lfs_handle->lock);
-    }
-    apr_thread_mutex_unlock(lfs_handle->lock);
-
-    // ** And reap them
-    for (i=0; i<n_cksum; i++) {
-        apr_thread_join(&value, lfs_handle->cksum_thread[i]);
-    }
-    free(lfs_handle->cksum_thread);
-
-    // ** Now do the same for the writer thread. It triggers the exit so just reap it
-    apr_thread_join(&value, lfs_handle->backend_thread);
-
-    lfs_queue_teardown(&(lfs_handle->cksum_stack));
-    lfs_queue_teardown(&(lfs_handle->backend_stack));
-
-    // ** Now we can safely close everything
-    if (lfs_handle->is_lio) {
-        retval = gop_sync_exec(gop_lio_close_object(lfs_handle->fd));
-        retval = (OP_STATE_SUCCESS == retval) ? 0 : EIO;
-        if (retval != 0) {
-            STATSD_COUNT("lfs_write_close_failure", 1);
-            GenericError(lfs_handle, "Failed to close file in LFS.", retval);
-            lfs_handle->fd = NULL;
-            lfs_handle->done_status = GLOBUS_FAILURE;
-        }
-        if ((lfs_handle->syslog_host != NULL)) {
-            syslog(LOG_INFO, "lfs_close: ret: %i path: %s", retval,
-                   lfs_handle->pathname_munged);
-        }
-
-        // ** Also update the LFS adler32 attribute
-        if (lfs_handle->do_calc_adler32 == 1) {
-            retval = lio_set_attr(lfs_handle->fs, lfs_handle->fs->creds,
-                                  lfs_handle->pathname_munged, NULL, "user.gridftp.adler32",
-                                  lfs_handle->adler32_human, strlen((char *)lfs_handle->adler32_human));
-            if (retval != OP_STATE_SUCCESS) lfs_handle->done_status = GLOBUS_FAILURE;
-            if (lfs_handle->expected_checksum != NULL) {
-                if (strcmp(lfs_handle->adler32_human, lfs_handle->expected_checksum) != 0) {
-                    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
-                                           "checksum mismatch! calculated=%s expected=%s\n", lfs_handle->adler32_human,
-                                           lfs_handle->expected_checksum);
-                    log_printf(1, "checksum mismatch! calculated=%s expected=%s\n",
-                               lfs_handle->adler32_human, lfs_handle->expected_checksum);
-                    lfs_handle->done_status = GLOBUS_FAILURE;
-                }
-            }
-        }
-    } else {
-        if ((retval = close(lfs_handle->fd_posix)) != 0) {
-            GenericError(lfs_handle, "Failed to close file in POSIX.", retval);
-            lfs_handle->fd_posix = 0;
-            lfs_handle->done_status = GLOBUS_FAILURE;
-        }
-    }
-
-    free(lfs_handle->pathname_munged);
-    free(lfs_handle->data_buffer);
-    free(lfs_handle->buffers);
-    apr_pool_destroy(lfs_handle->mpool);
-
-    return lfs_handle->done_status;
 }
 
 /*************************************************************************
@@ -785,177 +730,11 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle)
 }
 
 
-/*************************************************************************
- *  lfs_recv
- *  ---------
- *  This interface function is called when the client requests that a
- *  file be transfered to the server.
- *
- ************************************************************************/
-void
-lfs_recv(globus_gfs_operation_t  op, globus_gfs_transfer_info_t * transfer_info,
-            void * user_arg)
-{
-    lfs_handle_t *        lfs_handle;
-    globus_result_t       rc = GLOBUS_SUCCESS;
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Receiving a file: %s\n",
-                           transfer_info->pathname);
-    GlobusGFSName(lfs_recv);
-
-
-    lfs_handle = (lfs_handle_t *) user_arg;
-    lfs_handle->op = op;
-    lfs_handle->done_status = GLOBUS_SUCCESS;
-
-    char * PathName=transfer_info->pathname;
-    lfs_handle->pathname = PathName;
-    lfs_handle->is_lio = is_lfs_path(lfs_handle, PathName);
-    if (lfs_handle->is_lio) {
-        lfs_handle->pathname_munged = PathName;
-        while (lfs_handle->pathname_munged[0] == '/'
-                && lfs_handle->pathname_munged[1] == '/') {
-            lfs_handle->pathname_munged++;
-        }
-        if (strncmp(lfs_handle->pathname_munged, lfs_handle->mount_point,
-                    lfs_handle->mount_point_len)==0) {
-            lfs_handle->pathname_munged += lfs_handle->mount_point_len;
-        }
-        while (lfs_handle->pathname_munged[0] == '/'
-                && lfs_handle->pathname_munged[1] == '/') {
-            lfs_handle->pathname_munged++;
-        }
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                               "Munging path. Input: %s Mount: %s Munged: %s\n",
-                               transfer_info->pathname,
-                               lfs_handle->mount_point,
-                               lfs_handle->pathname_munged);
-    } else {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                               "Path not in LFS, opening regularly: %s\n",
-                               transfer_info->pathname);
-    }
-
-    if ((rc = prepare_handle(lfs_handle)) != GLOBUS_SUCCESS) goto cleanup;
-
-    if (transfer_info->expected_checksum) {
-        lfs_handle->expected_checksum =
-            globus_libc_strdup(transfer_info->expected_checksum);
-    }
-
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Open file %s.\n",
-                           lfs_handle->pathname);
-    int retval;
-    if (lfs_handle->is_lio) {
-        lfs_handle->fd = NULL;
-        retval = gop_sync_exec(gop_lio_open_object(lfs_handle->fs,
-                               lfs_handle->fs->creds,
-                               lfs_handle->pathname_munged,
-                               lio_fopen_flags("w"), NULL,
-                               &(lfs_handle->fd), 60));
-        if (retval != OP_STATE_SUCCESS) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "ERROR opening the file!\n");
-            log_printf(1, "ERROR opening the file!\n");
-            rc = GLOBUS_FAILURE;
-            goto cleanup;
-        }
-
-        retval = 0;
-        if (lfs_handle->fd == NULL) {
-            retval = lio_exists(lfs_handle->fs, lfs_handle->fs->creds,
-                                lfs_handle->pathname_munged);
-
-            if (retval & OS_OBJECT_DIR) {
-                retval = EISDIR;
-                rc = GLOBUS_FAILURE;
-                GenericError(lfs_handle, "Destination path is a directory; cannot overwrite.",
-                             retval);
-                goto cleanup;
-            }
-        }
-
-        if (lfs_handle->syslog_host != NULL) {
-            syslog(LOG_INFO, "lfs_open: ret: %i path: %s", retval,
-                   lfs_handle->pathname_munged);
-        }
-
-        if (transfer_info->alloc_size > 0) {
-            // hopefully this is the size we want to have the file be later
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                                   "Extending to %i bytes via client request\n", transfer_info->alloc_size);
-            gop_sync_exec(gop_lio_truncate(lfs_handle->fd, -transfer_info->alloc_size));
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, " ... complete\n",
-                                   transfer_info->alloc_size);
-        } else if (lfs_handle->default_size > 0) {
-            log_printf(5, "Truncated to default size=" XOT "\n", lfs_handle->default_size);
-            gop_sync_exec(gop_lio_truncate(lfs_handle->fd, -lfs_handle->default_size));
-        }
-    } else {
-        retval = open(PathName,  O_WRONLY | O_CREAT,
-                      S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP );
-        if (retval > 0) {
-            lfs_handle->fd_posix = retval;
-        } else {
-            SystemError(lfs_handle, "opening file; POSIX error", rc);
-            rc = GLOBUS_FAILURE;
-            goto cleanup;
-        }
-    }
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                           "Successfully opened file %s for user %s.\n", lfs_handle->pathname,
-                           lfs_handle->username);
-
-    globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
-    lfs_initialize_writers(lfs_handle);
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning to read file.\n");
-
-cleanup:
-    if (rc != GLOBUS_SUCCESS) {
-        lfs_handle->done_status = rc;
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                               "Aborted read before transfer began\n");
-        globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
-    }
-}
 
 // Allow injection of garbage errors, allowing us to test error-handling
 //#define FAKE_ERROR
 #ifdef FAKE_ERROR
 int block_count = 0;
 #endif
-
-/*************************************************************************
- * lfs_handle_write_op
- * --------------------
- * Callback for handling storage operations.
- *************************************************************************/
-static void lfs_handle_write_op(globus_gfs_operation_t op,
-                                globus_result_t result,
-                                globus_byte_t * buffer,
-                                globus_size_t nbytes,
-                                globus_off_t offset,
-                                globus_bool_t eof,
-                                void * user_arg)
-{
-    GlobusGFSName(lfs_handle_write_op);
-
-    Stack_ele_t *ele = (Stack_ele_t *)user_arg;
-    lfs_buffer_t *buf = (lfs_buffer_t *)get_stack_ele_data(ele);
-    lfs_handle_t *lfs_handle = buf->lfs_handle;
-
-    // ** Update the buffer
-    buf->offset = offset;
-    buf->nbytes = nbytes;
-    buf->eof = eof;
-
-    log_printf(5, "offset=" XOT " nbytes=" XOT " eof=%d\n", buf->offset,
-               buf->nbytes, eof);
-
-    globus_gridftp_server_update_bytes_written(op, offset, nbytes);
-
-    apr_thread_mutex_lock(lfs_handle->cksum_stack.lock);
-    push_link(lfs_handle->cksum_stack.stack, ele);
-    apr_thread_cond_signal(lfs_handle->cksum_stack.cond);
-    apr_thread_mutex_unlock(lfs_handle->cksum_stack.lock);
-}
 
 

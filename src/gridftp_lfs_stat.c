@@ -29,7 +29,7 @@ static void globus_l_gfs_file_copy_stat(globus_gfs_stat_t * stat_object,
 // Used for falling back to POSIX instead of LFS
 void lfs_stat_gridftp_posix(globus_gfs_operation_t op,
                             globus_gfs_stat_info_t * stat_info,
-                            void * user_arg)
+                            __attribute__((unused)) void * user_arg)
 {
     DIR * dir;
     char * PathName;

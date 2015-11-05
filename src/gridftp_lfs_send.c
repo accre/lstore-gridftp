@@ -53,9 +53,9 @@ int lfs_destroy_read(lfs_handle_t *lfs_handle)
 //  lfs_finished_read_cb - Called after gridftp is finished with the buffer
 // *************************************************************************
 
-static void lfs_finished_read_cb(globus_gfs_operation_t  op,
-                                    globus_result_t result,
-                                    globus_byte_t * buffer,
+static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t op,
+                                 __attribute__((unused)) globus_result_t result,
+                                 __attribute__((unused)) globus_byte_t * buffer,
                                     globus_size_t nbytes,
                                     void * user_arg)
 {
@@ -89,7 +89,7 @@ static void lfs_finished_read_cb(globus_gfs_operation_t  op,
     log_printf(1, "offset=" XOT " last=" XOT "\n", offset,
                lfs_handle->last_block_offset);
 
-    if ((nbytes != lfs_handle->buffer_size)
+    if ((nbytes != (unsigned) lfs_handle->buffer_size)
             || (lfs_handle->last_block_offset == offset) || (rc != GLOBUS_SUCCESS)) {
         log_printf(1, "Triggering shutdown.  rc=%d GLOBUS_SUCCESS=%d\n", rc,
                    GLOBUS_SUCCESS);
@@ -103,7 +103,7 @@ static void lfs_finished_read_cb(globus_gfs_operation_t  op,
 // lfs_read_thread - Thread task for reading data fro mthe backend
 // *************************************************************************
 
-void *lfs_read_thread(apr_thread_t *th, void *data)
+void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
 {
     lfs_handle_t *lfs_handle = (lfs_handle_t *)data;
     Stack_t *stack = lfs_handle->backend_stack.stack;

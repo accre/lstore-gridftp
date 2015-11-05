@@ -20,6 +20,8 @@
 #include <globus/globus_gridftp_server.h>
 #include "gridftp_lfs_error.h"
 #include "statsd-client.h"
+#include "ex3_compare.h"
+#include "interval_skiplist.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +30,9 @@ extern "C" {
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+
+#define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
+
 
 // Note that we hide all symbols from the global scope except the module itself.
 #pragma GCC visibility push(hidden)
@@ -56,6 +61,20 @@ extern globus_version_t gridftp_lfs_local_version;
 #define LFS_BUFFER_READY 2
 #define LFS_BUFFER_PENDING_WRITE 3
 #define LFS_BUFFER_WRITING 4
+
+typedef struct {
+    Stack_t stack;
+    ex_off_t lo;
+    ex_off_t hi;
+    ex_off_t len;
+    uLong adler32;
+} lfs_cluster_t;
+
+typedef struct {
+    ex_off_t lo;
+    ex_off_t hi;
+    uLong adler32;
+} lfs_interval_t;
 
 
 typedef struct {
@@ -242,6 +261,15 @@ void lfs_start(globus_gfs_operation_t op,
 lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
                                        char ** errstr);
 void handle_errstr(char ** errstr, char * error);
+void lfs_cluster_sort(int *cluster_order, ex_off_t *cluster_weight,
+                        int n_clusters);
+void lfs_cluster_weight(interval_skiplist_t *written_intervals,
+                        lfs_cluster_t *cluster, ex_off_t *cluster_weight,
+                        int n_clusters);
+void lfs_cluster(list_t *sorted_buffers, lfs_cluster_t *cluster, 
+                        int *n_clusters);
+void human_readable_adler32(char *adler32_human, uLong adler32);
+void *lfs_cksum_thread(apr_thread_t *th, void *data);
 #pragma GCC visibility pop
 
 #ifdef __cplusplus

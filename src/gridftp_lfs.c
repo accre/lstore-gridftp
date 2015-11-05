@@ -46,6 +46,7 @@ static globus_gfs_storage_iface_t globus_l_gfs_lfs_dsi_iface = {
     lfs_command,
     lfs_stat_gridftp,
     NULL,
+    NULL,
     NULL
 };
 
@@ -138,6 +139,8 @@ int lfs_deactivate(void)
         statsd_finalize(lfs_statsd_link);
         lfs_statsd_link = NULL;
     }
+    lio_shutdown();
+
     return 0;
 }
 

@@ -190,6 +190,6 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
 
     return h;
 cleanup:
-    error = strdup(error);
+    handle_errstr(errstr, strdup(error));
     return NULL;
 }
