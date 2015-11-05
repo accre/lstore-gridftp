@@ -523,7 +523,7 @@ void *lfs_write_thread(apr_thread_t *th, void *data)
     list_destroy(sorted_buffers);
 
     // ** Truncate to the proper size
-    gop_sync_exec(gop_lio_truncate(lfs_handle->fd, last_byte));
+    if (lfs_handle->is_lio) gop_sync_exec(gop_lio_truncate(lfs_handle->fd, last_byte));
 
     // ** Clean up
     rc = lfs_write_finish_transfer(lfs_handle);
