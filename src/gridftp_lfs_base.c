@@ -128,6 +128,7 @@ void lfs_destroy_gridftp(void * user_arg)
     if (lfs_handle) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
                                 "Destroying the LFS connection.\n");
+
         if (lfs_handle->fs) {
             lfs_handle->fs = NULL;
             lio_shutdown();

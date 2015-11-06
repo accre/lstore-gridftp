@@ -54,6 +54,7 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
         goto cleanup;
     }
 
+
     apr_thread_cond_create(&(h->cond), h->mpool);
     if (!(h->lock)) {
         error = "Unable to allocate a new condition for LFS.";
