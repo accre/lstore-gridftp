@@ -44,11 +44,14 @@ list(APPEND LIBS
 
 set(LSTORE_PROJECT_OBJS
     src/gridftp_lfs.c src/gridftp_lfs_recv.c src/gridftp_lfs_send.c
-    src/gridftp_lfs_stat.c src/statsd-client.c
+    src/gridftp_lfs_stat.c src/statsd-client.c src/gridftp_lfs_base.c
+    src/gridftp_lfs_util.c src/gridftp_lfs_command.c src/gridftp_lfs_checksum.c
+    src/gridftp_lfs_config.c src/gridftp_lfs_cluster.c
 )
 
 set(LSTORE_LIBRARY_NAME globus_gridftp_server_lfs)
 
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra -Werror -Wno-error=missing-field-initializers")
 # Common functionality is stored here
 include(cmake/LStoreCommon.cmake)
 
