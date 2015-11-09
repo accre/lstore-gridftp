@@ -139,8 +139,6 @@ int lfs_deactivate(void)
         statsd_finalize(lfs_statsd_link);
         lfs_statsd_link = NULL;
     }
-//QWERT    lio_shutdown();
-
     return 0;
 }
 
