@@ -23,6 +23,19 @@ bool is_lfs_path(const lfs_handle_t * lfs_handle, const char * path)
     return retval == 0;
 }
 
+void munge_lfs_path(const lfs_handle_t * lfs_handle, char ** path) {
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Initial path is %s\n", *path);
+    char * temp = *path;
+	ADVANCE_SLASHES(temp);
+	if (strncmp(temp, lfs_handle->mount_point,
+				lfs_handle->mount_point_len)==0) {
+		temp += lfs_handle->mount_point_len;
+	}
+	ADVANCE_SLASHES(temp);
+    *path = temp;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Final path is %s\n", *path);
+}
+
 // *************************************************************************
 //  lfs_queue_init - Initialize a worker stack
 // *************************************************************************
@@ -72,11 +85,13 @@ inline globus_bool_t is_close_done(lfs_handle_t *lfs_handle)
  ************************************************************************/
 inline void set_done(lfs_handle_t *lfs_handle, globus_result_t rc)
 {
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Setting done from %i\n",
+                                                lfs_handle->done);
     // Ignore already-done handles.
     if (is_done(lfs_handle) && (lfs_handle->done_status != GLOBUS_SUCCESS)) {
         return;
     }
-    lfs_handle->done = 1;
+    lfs_handle->done = (lfs_handle->done == 0) ? 1 : lfs_handle->done;
     lfs_handle->done_status = rc;
 }
 
@@ -94,7 +109,9 @@ void handle_errstr(char ** errstr, char * error)
     if (errstr == NULL) {
         return;
     } else if (*errstr == NULL) {
+        *errstr = strdup(error);
+    } else if (errstr == NULL) {
         free(*errstr);
+        *errstr = strdup(error);
     }
-    *errstr = strdup(error);
 }

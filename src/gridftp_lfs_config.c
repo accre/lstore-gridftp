@@ -91,9 +91,12 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
     }
 
     if (inip_get_integer(ifd, section, "allow_control_c", 0) == 1) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Disabling SIGINT handler\n");
         apr_signal(SIGINT, NULL);
         apr_signal_unblock(SIGINT);
+        signal(SIGINT, SIG_DFL);
     }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "ctrl-c: %i\n", inip_get_integer(ifd, section, "allow_control_c", 0));
 
 
     //
@@ -175,6 +178,7 @@ lfs_handle_t * lfs_gridftp_load_config(globus_gfs_session_info_t * session_info,
         load_limit = atoi(load_limit_char);
         if (load_limit < 1)
             load_limit = 32;
+        h->load_limit = load_limit;
     }
 
     char * mount_point_char = getenv("GRIDFTP_LFS_MOUNT_POINT");

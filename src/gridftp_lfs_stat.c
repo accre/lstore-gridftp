@@ -209,6 +209,7 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
     int stat_count = 0;
     lfs_handle_t * lfs_handle;
     GlobusGFSName(globus_l_gfs_lfs_stat);
+    char * errstr;
 
     lfs_handle = (lfs_handle_t *) user_arg;
     PathName=stat_info->pathname;
@@ -229,7 +230,7 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
     while (PathName[0] == '/' && PathName[1] == '/') {
         PathName++;
     }
-    snprintf(err_msg, MSG_SIZE, "Going to do stat on file %s.\n", PathName);
+    snprintf(err_msg, MSG_SIZE, "Going to do stat on LFS file %s.\n", PathName);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, err_msg);
 
     // ** If we made it here then it's a file in LFS
@@ -241,15 +242,17 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
     retval = lio_stat(lfs_handle->fs, lfs_handle->fs->creds, PathName, &fileInfo,
                       lfs_handle->mount_point, &readlink);
     if (retval == -ENOENT) {
+        errstr = strdup("Stat: file doesn't exist");
         result = GlobusGFSErrorSystemError("Stat: file doesn't exist", ENOENT);
         goto error_stat1;
     } else if (retval != 0) {
+        errstr = strdup("Stat: unknown error");
         result = GlobusGFSErrorSystemError("Stat: unknown error", retval);
         goto error_stat1;
     }
 
     snprintf(err_msg, MSG_SIZE, "Finished LFS stat operation.\n");
-    globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, err_msg);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, err_msg);
 
     mode_t mode = fileInfo.st_mode;
 
@@ -261,6 +264,7 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
         stat_array = (globus_gfs_stat_t *)
                      globus_malloc(sizeof(globus_gfs_stat_t));
         if(!stat_array) {
+            errstr = strdup("Cannot malloc stat_array");
             result = GlobusGFSErrorMemory("stat_array");
             goto error_alloc1;
         }
@@ -293,9 +297,11 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
         retval = lio_stat(lfs_handle->fs, lfs_handle->fs->creds, dotdot, &fileInfo,
                           lfs_handle->mount_point, &readlink);
         if (retval == -ENOENT) {
+            errstr = strdup("Stat: inner file doesn't exist");
             result = GlobusGFSErrorSystemError("Stat: file doesn't exist", ENOENT);
             goto error_stat1;
         } else if (retval != 0) {
+            errstr = strdup("Stat: inner unknown error");
             result = GlobusGFSErrorSystemError("Stat: unknown error", retval);
             goto error_stat1;
         }
@@ -377,9 +383,9 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
 
 error_alloc1:
 error_stat1:
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to stat file.\n");
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "%s\n", errstr);
     globus_gridftp_server_finished_stat(op, result, NULL, 0);
-
-    /*    GlobusGFSFileDebugExitWithError();  */
 }
 
 /* basepath and filename must be MAXPATHLEN long

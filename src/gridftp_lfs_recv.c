@@ -41,8 +41,13 @@ void lfs_recv(globus_gfs_operation_t op,
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Receiving a file: %s\n",
                            transfer_info->pathname);
     GlobusGFSName(lfs_recv);
+    char * errstr;
 
-
+    globus_gfs_finished_info_t finished_info;
+    memset(&finished_info, 0, sizeof(globus_gfs_finished_info_t));
+    finished_info.type = GLOBUS_GFS_OP_SEND;
+    finished_info.result = GLOBUS_SUCCESS;
+ 
     lfs_handle = (lfs_handle_t *) user_arg;
     lfs_handle->op = op;
     lfs_handle->done_status = GLOBUS_SUCCESS;
@@ -93,8 +98,9 @@ void lfs_recv(globus_gfs_operation_t op,
                                lio_fopen_flags("w"), NULL,
                                &(lfs_handle->fd), 60));
         if (retval != OP_STATE_SUCCESS) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "ERROR opening the file!\n");
-            log_printf(1, "ERROR opening the file!\n");
+            errstr = strdup("Can't open file");
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "%s\n",errstr);
+            log_printf(1, "%s\n", errstr);
             rc = GLOBUS_FAILURE;
             goto cleanup;
         }
@@ -144,17 +150,16 @@ void lfs_recv(globus_gfs_operation_t op,
                            "Successfully opened file %s for user %s.\n", lfs_handle->pathname,
                            lfs_handle->username);
 
-    globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
     lfs_initialize_writers(lfs_handle);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning to read file.\n");
+    globus_gridftp_server_begin_transfer(op, GLOBUS_SUCCESS, lfs_handle);
+    return;
 
 cleanup:
-    if (rc != GLOBUS_SUCCESS) {
-        lfs_handle->done_status = rc;
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO,
-                               "Aborted read before transfer began\n");
-        globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
-    }
+    rc = GlobusGFSErrorGeneric(errstr);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to recv file: %s\n", errstr);
+    globus_gridftp_server_finished_transfer(op, rc);
+    return;
 }
 
 //
@@ -320,6 +325,7 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
     iovec_t *iovec;
     tbuffer_t tbuf;
     Stack_t *stack;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning write thread.\n");
 
     // ** Fire off the initial set of tasks
     stack = new_stack();
@@ -336,9 +342,6 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
                 (void *) ele);
 
         if (rc != GLOBUS_SUCCESS) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
-                                   "Failed to dispatch a write. Most likely the transfer is finished\n");
-            log_printf(1, "Failed to dispatch a write. i=%d\n", i);
             free(ele);  // ** Just free the stack structure
             atomic_dec(lfs_handle->inflight_count);
         }
@@ -572,10 +575,6 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
                         (globus_byte_t *)buf->buffer, lfs_handle->buffer_size, lfs_handle_write_op,
                         (void *) ele);
                 if (rc != GLOBUS_SUCCESS) {
-                    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
-                                           "Failed to dispatch a write. Most likely the transfer is finished\n");
-                    log_printf(1, "Failed to dispatch a write. inflight=%d\n",
-                               atomic_get(lfs_handle->inflight_count));
                     free(ele);  // ** Just free the stack structure
                     atomic_dec(lfs_handle->inflight_count);
                 }
@@ -728,13 +727,4 @@ globus_result_t prepare_handle(lfs_handle_t *lfs_handle)
 
     return GLOBUS_SUCCESS;
 }
-
-
-
-// Allow injection of garbage errors, allowing us to test error-handling
-//#define FAKE_ERROR
-#ifdef FAKE_ERROR
-int block_count = 0;
-#endif
-
 
