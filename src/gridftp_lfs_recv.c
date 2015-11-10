@@ -11,6 +11,7 @@
 #include "ex3_compare.h"
 #include "stack.h"
 #include "apr_wrapper.h"
+#include "adler32_opt.h"
 
 #define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
 
@@ -317,7 +318,7 @@ log_printf(5, "inserting buf->off=" XOT " n_holding=%d\n", buf->offset, n_holdin
         c->adler32 = buf->adler32;
         move_down(&(c->stack));
         while ((buf = get_ele_data(&(c->stack))) != NULL) {
-            c->adler32 = adler32_combine(c->adler32, buf->adler32, buf->nbytes);
+            c->adler32 = opt_adler32_combine(c->adler32, buf->adler32, buf->nbytes);
             move_down(&(c->stack));
         }
 
@@ -332,7 +333,7 @@ log_printf(5, "inserting buf->off=" XOT " n_holding=%d\n", buf->offset, n_holdin
         if (idroplo) {
            interval->lo = idroplo->lo;
            interval->hi = c->hi;
-           interval->adler32 = adler32_combine(idroplo->adler32, c->adler32, c->len);
+           interval->adler32 = opt_adler32_combine(idroplo->adler32, c->adler32, c->len);
         } else {
            interval->lo = c->lo;
            interval->hi = c->hi;
@@ -345,7 +346,7 @@ log_printf(5, "inserting buf->off=" XOT " n_holding=%d\n", buf->offset, n_holdin
         idrophi = next_interval_skiplist(&it);
         if (idrophi) {
            interval->hi = idrophi->hi;
-           interval->adler32 = adler32_combine(interval->adler32, idrophi->adler32, idrophi->hi - idrophi->lo + 1);
+           interval->adler32 = opt_adler32_combine(interval->adler32, idrophi->adler32, idrophi->hi - idrophi->lo + 1);
         }
 
         // ** Remove the surrounding intervals
@@ -532,8 +533,8 @@ void *lfs_cksum_thread(apr_thread_t *th, void *data)
 
      // ** If we made it here we have a block to process
      if ((buf->nbytes > 0) && (lfs_handle->do_calc_adler32 == 1)) {
-        buf->adler32 = adler32(0L, Z_NULL, 0);
-        buf->adler32 = adler32(buf->adler32, (const Bytef *)buf->buffer, buf->nbytes);
+        buf->adler32 = opt_adler32(0L, Z_NULL, 0);
+        buf->adler32 = opt_adler32(buf->adler32, (const Bytef *)buf->buffer, buf->nbytes);
      } else {
         buf->adler32 = 0;
      }
