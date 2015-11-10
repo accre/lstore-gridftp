@@ -113,7 +113,6 @@ void *lfs_cksum_thread(__attribute__((unused)) apr_thread_t *th, void *data)
         apr_thread_cond_signal(writer->cond);
         apr_thread_mutex_unlock(writer->lock);
     }
-    apr_thread_mutex_unlock(lock);
 
     // ** Notify them I'm finished
     apr_thread_mutex_lock(lfs_handle->lock);
