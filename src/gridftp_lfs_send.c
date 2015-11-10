@@ -121,8 +121,10 @@ teardown:
     apr_thread_mutex_lock(lfs_handle->lock);
     if ((lfs_handle->done != 2) && (lfs_handle->backend_done == 1)) {
         lfs_handle->done = 2;
+        //** Release the lock because lfs_read_thread_destroy may use it
         apr_thread_mutex_unlock(lfs_handle->lock);
         lfs_read_thread_destroy(lfs_handle);
+        apr_thread_mutex_lock(lfs_handle->lock);  //** And get it back
         globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
     } else if (lfs_handle->done != 2) {
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Waiting on backend to die\n");
