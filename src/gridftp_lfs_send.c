@@ -119,7 +119,10 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
     }
 teardown:
     apr_thread_mutex_lock(lfs_handle->lock);
-    if ((lfs_handle->done != 2) && (lfs_handle->backend_done == 1)) {
+    log_printf(1, "done=%d backend_done=%d\n", lfs_handle->done, lfs_handle->backend_done);
+    //** Not  sure if this TEST is needed.  I think the way the code is structured now
+    //** The boolean below is always true......
+    if (lfs_handle->done != 2) {
         lfs_handle->done = 2;
         //** Release the lock because lfs_read_thread_destroy may use it
         apr_thread_mutex_unlock(lfs_handle->lock);
@@ -185,8 +188,8 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Register callback\n");
         rc = globus_gridftp_server_register_write(lfs_handle->op,
                 (globus_byte_t *)buf->buffer, nbytes, offset, -1, lfs_finished_read_cb, ele);
-        log_printf(5, "register_write offset=" XOT " nbytes=" XOT " eof=%d rc=%d\n",
-                   buf->offset, buf->nbytes, buf->eof, rc);
+        log_printf(5, "register_write offset=" XOT " nbytes=" XOT " eof=%d rc=%d finished=%d\n",
+                   buf->offset, buf->nbytes, buf->eof, rc, finished);
         globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done register callback\n");
         if (rc != GLOBUS_SUCCESS) {
             globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to create callback\n");
@@ -204,11 +207,11 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "End write loop\n");
 
     // ** Wind down the transfers
-    if (0) {
+    log_printf(5, "n_buffers=%d finished=%s\n", lfs_handle->n_buffers, finished);
     for (i=0; i<lfs_handle->n_buffers && (finished == 0); i++) {
         apr_thread_mutex_lock(lock);
         while ((ele = pop_link(stack)) == NULL) {
-            //apr_thread_cond_wait(cond, lock);  // ** Nothing to do so wait
+            apr_thread_cond_wait(cond, lock);  // ** Nothing to do so wait
         }
         apr_thread_mutex_unlock(lock);
         buf = get_stack_ele_data(ele);
@@ -220,16 +223,13 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
 
         free(ele);
     }
-    }
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done winddown\n");
-    globus_gridftp_server_register_write(lfs_handle->op,
-                    NULL, 0, 0, -1, lfs_finished_read_cb, NULL);
 
     // ** IF we we made it without issues look and see if GridFTP had a problem
     apr_thread_mutex_lock(lfs_handle->lock);
     if ((lfs_handle->done_status == GLOBUS_SUCCESS) &&
             (rc != GLOBUS_SUCCESS)) {
-        lfs_handle->done_status = rc;    
+        lfs_handle->done_status = rc;
     }
     lfs_handle->backend_done = 1;
     apr_thread_cond_broadcast(lfs_handle->cond);
@@ -336,6 +336,8 @@ int lfs_read_thread_destroy(lfs_handle_t *lfs_handle)
     free(lfs_handle->buffers);
     apr_pool_destroy(lfs_handle->mpool);
 
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroy read thread complete\n");
+
     return(retval);
 }
 
@@ -408,10 +410,12 @@ Stack_ele_t * lfs_read_get_block(lfs_handle_t * lfs_handle,
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Waiting for block\n");
     apr_thread_mutex_lock(lock);
     while ((ele = pop_link(stack)) == NULL) {
-        apr_thread_mutex_unlock(lfs_handle->lock);
+        apr_thread_mutex_lock(lfs_handle->lock);
         if (lfs_handle->done != 0) {
             // Time to exit
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Bailing! done=%d\n", lfs_handle->done);
             apr_thread_mutex_unlock(lfs_handle->lock);
+            apr_thread_mutex_unlock(lock);
             return NULL;
         }
         apr_thread_mutex_unlock(lfs_handle->lock);
@@ -424,7 +428,7 @@ Stack_ele_t * lfs_read_get_block(lfs_handle_t * lfs_handle,
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done waiting for block\n");
     apr_thread_mutex_unlock(lock);
     return ele;
-}   
+}
 
 ex_off_t lfs_read_perform_read(lfs_handle_t * lfs_handle,
                                 lfs_buffer_t * buf,
