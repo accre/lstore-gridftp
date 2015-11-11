@@ -207,8 +207,8 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "End write loop\n");
 
     // ** Wind down the transfers
-    log_printf(5, "n_buffers=%d finished=%s\n", lfs_handle->n_buffers, finished);
-    for (i=0; i<lfs_handle->n_buffers && (finished == 0); i++) {
+    log_printf(5, "n_buffers=%d finished=%d\n", lfs_handle->n_buffers, finished);
+    for (i=0; i<lfs_handle->n_buffers; i++) {
         apr_thread_mutex_lock(lock);
         while ((ele = pop_link(stack)) == NULL) {
             apr_thread_cond_wait(cond, lock);  // ** Nothing to do so wait
@@ -414,6 +414,7 @@ Stack_ele_t * lfs_read_get_block(lfs_handle_t * lfs_handle,
         if (lfs_handle->done != 0) {
             // Time to exit
             globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Bailing! done=%d\n", lfs_handle->done);
+            if (ele != NULL) push_link(stack, ele);  //** Push it back on the top if needed
             apr_thread_mutex_unlock(lfs_handle->lock);
             apr_thread_mutex_unlock(lock);
             return NULL;
