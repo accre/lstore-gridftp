@@ -124,6 +124,9 @@ void lfs_destroy_gridftp(void * user_arg)
 {
     lfs_handle_t *       lfs_handle;
     lfs_handle = (lfs_handle_t *) user_arg;
+
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Destroying GRIDFTP handle\n");
+
     STATSD_COUNT("destroy",1);
     if (lfs_handle) {
         if (lfs_handle->fs) {
@@ -156,6 +159,9 @@ void lfs_destroy_gridftp(void * user_arg)
         globus_free(lfs_handle);
     }
     closelog();
+
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Destruction of GRIDFTP handle is complete\n");
+
 }
 
 // Handle asynchronous event notifications
