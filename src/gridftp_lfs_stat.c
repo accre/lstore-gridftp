@@ -359,7 +359,7 @@ lfs_stat_gridftp(globus_gfs_operation_t op, globus_gfs_stat_info_t * stat_info,
 
         // ** Put everything in the format globus wants
         stat_count = stack_size(stack) / 2;
-        stat_array = (globus_gfs_stat_t *) 
+        stat_array = (globus_gfs_stat_t *)
                         globus_malloc(sizeof(globus_gfs_stat_t) * stat_count);
         for (i=stat_count-1; i>0; i--) {
             readlink = pop(stack);
@@ -385,6 +385,7 @@ error_alloc1:
 error_stat1:
     globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to stat file.\n");
     globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "%s\n", errstr);
+    if (errstr) free(errstr);
     globus_gridftp_server_finished_stat(op, result, NULL, 0);
 }
 
