@@ -310,7 +310,7 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
     Stack_ele_t *ele;
     lfs_buffer_t *buf;
     apr_time_t write_timer;
-    int finished, i, n_clusters, *cluster_order, n, n_to_process, n_holding;
+    int finished, i, n_clusters, *cluster_order, n, n_to_process, n_holding, force_flush;
     ex_off_t *cluster_weights;
     int n_iov, n_ex, rc, n_start, eof;
     lfs_interval_t *idroplo, *idrophi;
@@ -327,7 +327,11 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
     Stack_t *stack;
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning write thread.\n");
 
-    // ** Fire off the initial set of tasks
+    // ****** Fire off the initial set of tasks *****
+    // ** The sleep() helps make sure we get most of the buffers registered.
+    // ** Otherwise most will get rejected because the server isn't ready yet.
+    sleep(1);
+
     stack = new_stack();
     atomic_set(lfs_handle->inflight_count, lfs_handle->n_buffers);
     for (i=0; i<lfs_handle->n_buffers; i++) {
@@ -340,7 +344,6 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
         rc = globus_gridftp_server_register_read(lfs_handle->op,
                 (globus_byte_t *)buf->buffer, lfs_handle->buffer_size, lfs_handle_write_op,
                 (void *) ele);
-
         if (rc != GLOBUS_SUCCESS) {
             free(ele);  // ** Just free the stack structure
             atomic_dec(lfs_handle->inflight_count);
@@ -400,16 +403,22 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
             atomic_dec(lfs_handle->inflight_count);
         }
         if (buf->eof == 1) eof = 1;
-        if ((atomic_get(lfs_handle->inflight_count) == (unsigned int) n_holding)
-                && (eof == 1)) finished = 1;
+
+        // ** Check if we need to force a buffer flush
+        force_flush = 0;
+        if (atomic_get(lfs_handle->inflight_count) == (unsigned int) n_holding) {
+            force_flush = 1;
+            if (eof == 1) finished = 1;
+        }
 
         // ** See if it's time to flush the buffers
-        if ((n_holding < lfs_handle->high_water_flush) && (finished != 1)) continue;
+        if ((n_holding < lfs_handle->high_water_flush) &&
+             (force_flush == 0) && (finished != 1)) continue;
 
         log_printf(1, "FLUSHING inflight=%d n_holding=%d eof=%d finished=%d\n",
                    atomic_get(lfs_handle->inflight_count), n_holding, eof, finished);
 
-        low_water_mark = (finished == 1) ? 0 : lfs_handle->low_water_flush;
+        low_water_mark = ((finished == 1) || (force_flush == 1)) ? 0 : lfs_handle->low_water_flush;
 
         // ** If we make it here we need to flush
         // ** 1st we need to cluster the buffers
@@ -581,7 +590,7 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
             }
         }
 
-        if (atomic_get(lfs_handle->inflight_count) > 0) finished = 0;
+        finished = (atomic_get(lfs_handle->inflight_count) > 0) ? 0 : 1;
         log_printf(1, "finished=%d inflight=%d n_holding=%d eof=%d sorted_size=%d\n",
                    finished, atomic_get(lfs_handle->inflight_count), n_holding, eof,
                    list_key_count(sorted_buffers));
