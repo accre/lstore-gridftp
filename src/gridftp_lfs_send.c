@@ -78,13 +78,14 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
 {
     GlobusGFSName(lfs_handle_read_cb);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Enter read callback\n");
+    lfs_handle_t *lfs_handle = NULL; 
     Stack_ele_t *ele = (Stack_ele_t *)user_arg;
     lfs_buffer_t *buf = (lfs_buffer_t *)get_stack_ele_data(ele);
     if (!buf) {
         goto teardown;
     }
     globus_result_t rc = buf->eof;
-    lfs_handle_t *lfs_handle = buf->lfs_handle;
+    lfs_handle = buf->lfs_handle;
     
     ex_off_t offset = buf->offset;
 
@@ -118,21 +119,23 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
                         GLOBUS_SUCCESS);
     }
 teardown:
-    apr_thread_mutex_lock(lfs_handle->lock);
-    log_printf(1, "done=%d backend_done=%d\n", lfs_handle->done, lfs_handle->backend_done);
-    //** Not  sure if this TEST is needed.  I think the way the code is structured now
-    //** The boolean below is always true......
-    if (lfs_handle->done != 2) {
-        lfs_handle->done = 2;
-        //** Release the lock because lfs_read_thread_destroy may use it
+    if (lfs_handle) {
+        apr_thread_mutex_lock(lfs_handle->lock);
+        log_printf(1, "done=%d backend_done=%d\n", lfs_handle->done, lfs_handle->backend_done);
+        //** Not  sure if this TEST is needed.  I think the way the code is structured now
+        //** The boolean below is always true......
+        if (lfs_handle->done != 2) {
+            lfs_handle->done = 2;
+            //** Release the lock because lfs_read_thread_destroy may use it
+            apr_thread_mutex_unlock(lfs_handle->lock);
+            lfs_read_thread_destroy(lfs_handle);
+            apr_thread_mutex_lock(lfs_handle->lock);  //** And get it back
+            globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
+        } else if (lfs_handle->done != 2) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Waiting on backend to die\n");
+        }
         apr_thread_mutex_unlock(lfs_handle->lock);
-        lfs_read_thread_destroy(lfs_handle);
-        apr_thread_mutex_lock(lfs_handle->lock);  //** And get it back
-        globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
-    } else if (lfs_handle->done != 2) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Waiting on backend to die\n");
     }
-    apr_thread_mutex_unlock(lfs_handle->lock);
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Exit read callback\n");
 }
 
@@ -242,6 +245,7 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
 //
 // lfs_read_thread_initialize - Prepares and starts backend thread
 //
+#pragma GCC diagnostic warning "-Wunused-variable"
 void lfs_read_thread_initialize(lfs_handle_t *lfs_handle)
 {
     int i;
@@ -288,6 +292,7 @@ void lfs_read_thread_initialize(lfs_handle_t *lfs_handle)
     thread_create_assert(&(lfs_handle->backend_thread), NULL, lfs_read_thread,
                          (void *)lfs_handle, lfs_handle->mpool);
 }
+#pragma GCC diagnostic error "-Wunused-variable"
 
 //
 // lfs_read_thread_destroy - Stops and tears down background reader thread

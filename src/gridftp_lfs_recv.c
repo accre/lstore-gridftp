@@ -41,7 +41,7 @@ void lfs_recv(globus_gfs_operation_t op,
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Receiving a file: %s\n",
                            transfer_info->pathname);
     GlobusGFSName(lfs_recv);
-    char * errstr;
+    char * errstr = NULL;
 
     globus_gfs_finished_info_t finished_info;
     memset(&finished_info, 0, sizeof(globus_gfs_finished_info_t));
@@ -313,6 +313,7 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
     int finished, i, n_clusters, *cluster_order, n, n_to_process, n_holding, force_flush;
     ex_off_t *cluster_weights;
     int n_iov, n_ex, rc, n_start, eof;
+    rc = GLOBUS_SUCCESS;
     lfs_interval_t *idroplo, *idrophi;
     lfs_interval_t *interval;
     lfs_interval_t **iptr;
@@ -658,7 +659,8 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
 // *************************************************************************
 //   lfs_initialize_writers - Sets up all the LFS bits for writing to a file
 // *************************************************************************
-
+// Ignore the result from thread_create_assert
+#pragma GCC diagnostic warning "-Wunused-variable"
 void lfs_initialize_writers(lfs_handle_t *lfs_handle)
 {
     int i;
@@ -693,6 +695,7 @@ void lfs_initialize_writers(lfs_handle_t *lfs_handle)
                              (void *)lfs_handle, lfs_handle->mpool);
     }
 }
+#pragma GCC diagnostic error "-Wunused-variable"
 
 /*************************************************************************
  * prepare_handle

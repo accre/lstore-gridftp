@@ -33,7 +33,7 @@ void lfs_command(globus_gfs_operation_t  op,
                  globus_gfs_command_info_t * cmd_info,
                  void * user_arg)
 {
-    globus_result_t result;
+    globus_result_t result = GLOBUS_SUCCESS;
     lfs_handle_t * lfs_handle;
     char * PathName;
     char * PathName_munged;
