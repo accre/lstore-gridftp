@@ -10,9 +10,8 @@
 
 #define MAX_MSG_LEN 100
 
-
-
-statsd_link *statsd_init_with_namespace(const char *host, int port, const char *ns_)
+statsd_link *statsd_init_with_namespace(const char *host, int port,
+                                        const char *ns_)
 {
     size_t len = strlen(ns_);
 
@@ -53,7 +52,9 @@ statsd_link *statsd_init(const char *host, int port)
         fprintf(stderr, "%s\n", gai_strerror(error));
         return NULL;
     }
-    memcpy(&(temp->server).sin_addr, &((struct sockaddr_in*)result->ai_addr)->sin_addr, sizeof(struct in_addr));
+    memcpy(&(temp->server).sin_addr,
+           &((struct sockaddr_in*)result->ai_addr)->sin_addr,
+           sizeof(struct in_addr));
     freeaddrinfo(result);
 
     if (inet_aton(host, &(temp->server).sin_addr) == 0) {
@@ -112,32 +113,39 @@ int statsd_send(statsd_link *link, const char *message)
 {
     int slen = sizeof(link->server);
 
-    if (sendto(link->sock, message, strlen(message), 0, (struct sockaddr *) &link->server, slen) == -1) {
+    if (sendto(link->sock, message, strlen(message), 0,
+               (struct sockaddr *) &link->server, slen) == -1) {
         perror("sendto");
         return -1;
     }
     return 0;
 }
 
-static int send_stat(statsd_link *link, char *stat, size_t value, const char *type, float sample_rate)
+static int send_stat(statsd_link *link, char *stat, size_t value,
+                     const char *type, float sample_rate)
 {
     char message[MAX_MSG_LEN];
     if (!should_send(sample_rate)) {
         return 0;
     }
 
-    statsd_prepare(link, stat, value, type, sample_rate, message, MAX_MSG_LEN, 0);
+    statsd_prepare(link, stat, value, type, sample_rate, message, MAX_MSG_LEN,
+                    0);
 
     return statsd_send(link, message);
 }
 
-void statsd_prepare(statsd_link *link, char *stat, size_t value, const char *type, float sample_rate, char *message, size_t buflen, int lf)
+void statsd_prepare(statsd_link *link, char *stat, size_t value,
+                    const char *type, float sample_rate, char *message, size_t
+                    buflen, int lf)
 {
     cleanup(stat);
     if (sample_rate == 1.0) {
-        snprintf(message, buflen, "%s%s:%zd|%s%s", link->ns ? link->ns : "", stat, value, type, lf ? "\n" : "");
+        snprintf(message, buflen, "%s%s:%zd|%s%s", link->ns ? link->ns : "",
+                    stat, value, type, lf ? "\n" : "");
     } else {
-        snprintf(message, buflen, "%s%s:%zd|%s|@%.2f%s", link->ns ? link->ns : "", stat, value, type, sample_rate, lf ? "\n" : "");
+        snprintf(message, buflen, "%s%s:%zd|%s|@%.2f%s", link->ns ? link->ns :
+                    "", stat, value, type, sample_rate, lf ? "\n" : "");
     }
 }
 
