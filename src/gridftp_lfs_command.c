@@ -33,12 +33,13 @@ void lfs_command(globus_gfs_operation_t  op,
                  globus_gfs_command_info_t * cmd_info,
                  void * user_arg)
 {
-    globus_result_t result;
+    globus_result_t result = GLOBUS_SUCCESS;
     lfs_handle_t * lfs_handle;
     char * PathName;
     char * PathName_munged;
     GlobusGFSName(lfs_command);
 
+    char * errstr = NULL;
     char * return_value = GLOBUS_NULL;
 
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP, "Entering lfs_command\n");
@@ -58,7 +59,7 @@ void lfs_command(globus_gfs_operation_t  op,
         PathName_munged++;
     }
 
-    GlobusGFSErrorSystemError("command", ENOSYS);
+    // GlobusGFSErrorSystemError("command", ENOSYS);
     switch (cmd_info->command) {
     case GLOBUS_GFS_CMD_MKD: {
         STATSD_COUNT("mkdir",1);
@@ -72,19 +73,19 @@ void lfs_command(globus_gfs_operation_t  op,
                                    lfs_handle->fs->creds, PathName_munged,
                                    OS_OBJECT_DIR, NULL, NULL));
             retval = (OP_STATE_SUCCESS == retval) ? 0 : EREMOTEIO;
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "MKD retval:%i\n", retval);
             errno = -retval;
         } else {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Making POSIX directory: %s\n",
+                                   PathName_munged);
             retval = mkdir(PathName, S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH);
         }
-        if (retval < 0) {
-            if (errno) {
+        if (retval != 0) {
+                errstr = strdup("Could not make directory");
                 result = GlobusGFSErrorSystemError("mkdir", errno);
-            } else {
-                GenericError(lfs_handle,
-                                "Unable to create directory (reason unknown)",
-                                result);
-            }
         } else {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Successfully made directory: %s\n",
+                                            PathName_munged);
             result = GLOBUS_SUCCESS;
         }
     }
@@ -165,8 +166,14 @@ void lfs_command(globus_gfs_operation_t  op,
         break;
     }
 
-    globus_gridftp_server_finished_command(op, result, return_value);
-
+    if (result == GLOBUS_SUCCESS) {
+        globus_gridftp_server_finished_command(op, result, return_value);
+    } else {
+        if (errstr) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "%s\n", errstr);
+        }
+        globus_gridftp_server_finished_command(op, result, NULL);
+    }
     if (return_value) {
         free(return_value);
     }

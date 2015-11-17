@@ -104,8 +104,15 @@ typedef struct {
 
 struct globus_l_gfs_lfs_handle_s {
     apr_pool_t *          mpool;                // ** APR memory pool
+    // Locking semantics - Locks
     apr_thread_cond_t *   cond;                 // ** GLobal cond
     apr_thread_mutex_t *  lock;                 // ** GLobal lock
+    // Protected by the global lock
+    globus_result_t       done_status;          // ** Return code for GridFTP
+    char                  backend_done;         // ** Set to true when backend
+                                                //    thread is ready to exit
+    char                  done;                 // ** Global finished thread
+
     apr_thread_t *        backend_thread;       // ** The backend reading or writing thread to LIO
     apr_thread_t **       cksum_thread;         // ** Checksum worker threads
     atomic_int_t          inflight_count;       // ** Number of inflight buffers
@@ -137,9 +144,7 @@ struct globus_l_gfs_lfs_handle_s {
     globus_mutex_t *      globus_lock;          // ** Globus lock just used in the interface layer between LIO/Globus
     globus_off_t          offset;               // ** offset on gridftp side
     globus_off_t          op_length;            // ** Length of the requested read/write size
-    globus_result_t       done_status;          // ** Return code for GridFTP
     int                   do_calc_adler32;      // ** Do calculate adler32 for writes if = 1
-    int                   done;                 // ** Finished flag
     int                   fd_posix;             // ** POSIX file handle
     int                   high_water_flush;     // ** Flush when the used buffer count gets above this
     int                   is_lio;               // ** (=1) if the file is an LFS file
@@ -162,6 +167,7 @@ extern char err_msg[MSG_SIZE];
 
 // figure out if a path if LFS based
 bool is_lfs_path(const lfs_handle_t * lfs_handle, const char * path);
+void munge_lfs_path(const lfs_handle_t * lfs_handle, char ** path);
 globus_byte_t * lfs_get_free_buffer(lfs_handle_t *lfs_handle, globus_size_t nbytes);
 globus_result_t lfs_mark_buffer_ready(lfs_handle_t * lfs_handle, globus_byte_t* buffer, globus_off_t offset, globus_size_t nbytes);
 globus_size_t count_blocks(lfs_handle_t * lfs_handle, unsigned char state);

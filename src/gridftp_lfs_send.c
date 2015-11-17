@@ -4,10 +4,22 @@
 #include "stack.h"
 #include "apr_wrapper.h"
 
-#define ADVANCE_SLASHES(x) {while (x[0] == '/' && x[1] == '/') x++;}
-
-void lfs_initialize_read(lfs_handle_t *lfs_handle);
-int lfs_destroy_read(lfs_handle_t * lfs_handle);
+// Forward declarations
+void lfs_read_thread_initialize(lfs_handle_t *lfs_handle);
+int lfs_read_thread_destroy(lfs_handle_t * lfs_handle);
+bool lfs_read_file_open(lfs_handle_t * lfs_handle, char ** errstr);
+Stack_ele_t * lfs_read_get_block(lfs_handle_t * lfs_handle,
+                                    Stack_t * stack,
+                                    apr_thread_mutex_t * lock,
+                                    apr_thread_cond_t * cond);
+ex_off_t lfs_read_perform_read(lfs_handle_t * lfs_handle,
+                                lfs_buffer_t * buf,
+                                ex_off_t nbytes,
+                                ex_off_t offset);
+globus_result_t lfs_read_handle_error(lfs_buffer_t * buf,
+                                        ex_off_t offset,
+                                        ex_off_t nbytes,
+                                        ex_off_t nread);
 
 //
 // lfs_send - called by gridftp to begin sending a file to another server
@@ -16,112 +28,47 @@ void lfs_send(globus_gfs_operation_t op,
               globus_gfs_transfer_info_t * transfer_info,
               void * user_arg)
 {
-    lfs_handle_t *  lfs_handle;
     GlobusGFSName(globus_l_gfs_lfs_send);
     globus_result_t rc = GLOBUS_SUCCESS;
-    globus_size_t block_size;
-    int retval;
+    char * errstr;
 
-    lfs_handle = (lfs_handle_t *) user_arg;
+    // Set up handle
+    lfs_handle_t * lfs_handle = (lfs_handle_t *) user_arg;
     lfs_handle->pathname = transfer_info->pathname;
-    lfs_handle->pathname_munged = transfer_info->pathname;
-    lfs_handle->is_lio = is_lfs_path(lfs_handle, lfs_handle->pathname);
-    if (lfs_handle->is_lio) {
-        ADVANCE_SLASHES(lfs_handle->pathname_munged)
-        if (strncmp(lfs_handle->pathname_munged, lfs_handle->mount_point,
-                    lfs_handle->mount_point_len)==0) {
-            lfs_handle->pathname_munged += lfs_handle->mount_point_len;
-        }
-        ADVANCE_SLASHES(lfs_handle->pathname_munged)
-    }
     lfs_handle->op = op;
+    lfs_handle->backend_done = 0;
     lfs_handle->done = 0;
     lfs_handle->done_status = GLOBUS_SUCCESS;
-
-    globus_gridftp_server_get_block_size(op, &block_size);
-    lfs_handle->gridftp_buffer_size = block_size;
-
+	lfs_handle->pathname_munged = transfer_info->pathname;
+    lfs_handle->is_lio = is_lfs_path(lfs_handle, lfs_handle->pathname);
+    if (lfs_handle->is_lio) {
+        munge_lfs_path(lfs_handle, &lfs_handle->pathname_munged);
+    }
+    globus_gridftp_server_get_block_size(op, (globus_size_t *)
+                                                &lfs_handle->gridftp_buffer_size);
     globus_gridftp_server_get_read_range(lfs_handle->op,
                                          &lfs_handle->offset,
                                          &lfs_handle->op_length);
     globus_gfs_log_message(GLOBUS_GFS_LOG_DUMP,
                            "Operation starting at %d, length %d\n", lfs_handle->offset,
                            lfs_handle->op_length);
-
-    globus_gridftp_server_begin_transfer(lfs_handle->op, 0, lfs_handle);
-
-    if (lfs_handle->is_lio) {
-        retval = lio_exists(lfs_handle->fs, lfs_handle->fs->creds,
-                            lfs_handle->pathname_munged);
-        if (retval == 0) {
-            SystemError(lfs_handle, "opening file for read, doesn't exist", rc);
-            errno = ENOENT;
-            goto cleanup;
-        }
-        if (retval & OS_OBJECT_DIR) {
-            GenericError(lfs_handle, "The file you are trying to read is a directory", rc);
-            goto cleanup;
-        }
-
-        lfs_handle->fd = NULL;
-        retval = gop_sync_exec(gop_lio_open_object(lfs_handle->fs,
-                                                    lfs_handle->fs->creds,
-                                                    lfs_handle->pathname_munged,
-                                                    lio_fopen_flags("r"), NULL,
-                                                    &(lfs_handle->fd), 60));
-
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from LFS: %s\n",
-                               lfs_handle->pathname_munged);
-        if (lfs_handle->syslog_host != NULL) {
-            syslog(LOG_INFO, "lfs_open: ret: %i path: %s", retval,
-                   lfs_handle->pathname_munged);
-        }
-        if (retval != OP_STATE_SUCCESS) {
-            if (0) { //errno == EINTERNAL) {
-                SystemError(lfs_handle,
-                            "opening file due to an internal LFS error; "
-                            "could be a misconfiguration or bad installation at the site.",
-                            rc);
-            } else if (errno == EACCES) {
-                SystemError(lfs_handle, "opening file; permission error in LFS.", rc);
-            } else {
-                SystemError(lfs_handle,
-                            "opening file; failed to open file due to unknown error in LFS.", rc);
-            }
-            goto cleanup;
-        }
-
-        //** See if we need to fetch the size
-        if (lfs_handle->op_length == -1) lfs_handle->op_length = lio_size(
-                        lfs_handle->fd);
-    } else {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from filesystem: %s\n",
-                               lfs_handle->pathname);
-        lfs_handle->fd_posix = open(lfs_handle->pathname, O_RDONLY);
-        if (lfs_handle->fd_posix == -1) {
-            rc = -1;
-            SystemError(lfs_handle, "failed to open POSIX file.", rc);
-            log_printf(1, "failed to open POSIX file: fname=%s", lfs_handle->pathname);
-            goto cleanup;
-        }
-        //** See if we need to fetch the size
-        if (lfs_handle->op_length == -1) lfs_handle->op_length = lseek(
-                        lfs_handle->fd_posix, 0, SEEK_END);
+    if (lfs_read_file_open(lfs_handle, &errstr)) {
+        goto cleanup;
     }
-
-    lfs_initialize_read(lfs_handle);
+    globus_gridftp_server_begin_transfer(op, GLOBUS_SUCCESS, lfs_handle);
+    lfs_read_thread_initialize(lfs_handle);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Beginning to send file.\n");
+    return;
 
 cleanup:
-    if (rc != GLOBUS_SUCCESS) {
-        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
-                "Failed to initialize read setup\n");
-        set_done(lfs_handle, rc);
-        globus_gridftp_server_finished_transfer(op, rc);
-    }
+    rc = GlobusGFSErrorGeneric(errstr);
+    set_done(lfs_handle, rc);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to open file\n");
+    globus_gridftp_server_finished_transfer(op, rc);
 }
 
 //
-// lfs_finished_read_cb - called when globus no longer needs a buffer
+// lfs_finished_read_cb - Callback from globus to say a buffer is unused
 //
 static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t op,
                                  __attribute__((unused)) globus_result_t result,
@@ -130,10 +77,16 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
                                     void * user_arg)
 {
     GlobusGFSName(lfs_handle_read_cb);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Enter read callback\n");
+    lfs_handle_t *lfs_handle = NULL; 
     Stack_ele_t *ele = (Stack_ele_t *)user_arg;
     lfs_buffer_t *buf = (lfs_buffer_t *)get_stack_ele_data(ele);
+    if (!buf) {
+        goto teardown;
+    }
     globus_result_t rc = buf->eof;
-    lfs_handle_t *lfs_handle = buf->lfs_handle;
+    lfs_handle = buf->lfs_handle;
+    
     ex_off_t offset = buf->offset;
 
     log_printf(1, "fname=%s nbytes=" XOT " eof=%d\n", lfs_handle->pathname, nbytes,
@@ -142,170 +95,105 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
     // ** Notify the backend that we are ready for more
     apr_thread_mutex_lock(lfs_handle->backend_stack.lock);
     push_link(lfs_handle->backend_stack.stack, ele);
-
-
-    if (rc != GLOBUS_SUCCESS) {
-        apr_thread_mutex_lock(lfs_handle->lock);
-        lfs_handle->done_status = rc;
-        apr_thread_mutex_unlock(lfs_handle->lock);
-    }
-
     apr_thread_cond_broadcast(lfs_handle->backend_stack.cond);
     apr_thread_mutex_unlock(lfs_handle->backend_stack.lock);
 
     log_printf(1, "offset=" XOT " last=" XOT "\n", offset,
                lfs_handle->last_block_offset);
 
-    if ((nbytes != (unsigned) lfs_handle->buffer_size)
-            || (lfs_handle->last_block_offset == offset) || (rc != GLOBUS_SUCCESS)) {
-        log_printf(1, "Triggering shutdown.  rc=%d GLOBUS_SUCCESS=%d\n", rc,
-                   GLOBUS_SUCCESS);
-        // ** This can trigger a GridFTP segfault but it looks to be a gridftp
-        // problem not LIO.
-        globus_gridftp_server_finished_transfer(lfs_handle->op, rc);
-        lfs_destroy_read(lfs_handle);
+    if ((nbytes != (unsigned) lfs_handle->buffer_size) ||
+            (lfs_handle->last_block_offset == offset) ||
+            (rc != GLOBUS_SUCCESS)) {
+        // Make sure to propagate the error properly
+        apr_thread_mutex_lock(lfs_handle->lock);
+        if (lfs_handle->done_status != GLOBUS_SUCCESS) {
+            // If done_status is already an error, we want to preseve it
+            set_done(lfs_handle, lfs_handle->done_status);
+        } else {
+            // Otherwise, set it to the error code we just got
+            set_done(lfs_handle, rc);
+        }
+        apr_thread_mutex_unlock(lfs_handle->lock);
+        log_printf(1, "Triggering shutdown.  rc=%d GLOBUS_SUCCESS=%d\n",
+                        lfs_handle->done_status,
+                        GLOBUS_SUCCESS);
     }
+teardown:
+    if (lfs_handle) {
+        apr_thread_mutex_lock(lfs_handle->lock);
+        log_printf(1, "done=%d backend_done=%d\n", lfs_handle->done, lfs_handle->backend_done);
+        //** Not  sure if this TEST is needed.  I think the way the code is structured now
+        //** The boolean below is always true......
+        if (lfs_handle->done != 2) {
+            lfs_handle->done = 2;
+            //** Release the lock because lfs_read_thread_destroy may use it
+            apr_thread_mutex_unlock(lfs_handle->lock);
+            lfs_read_thread_destroy(lfs_handle);
+            apr_thread_mutex_lock(lfs_handle->lock);  //** And get it back
+            globus_gridftp_server_finished_transfer(op, lfs_handle->done_status);
+        } else if (lfs_handle->done != 2) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Waiting on backend to die\n");
+        }
+        apr_thread_mutex_unlock(lfs_handle->lock);
+    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Exit read callback\n");
 }
 
-
-// *************************************************************************
-//   lfs_destroy_read - Tears down up all the LFS bits for reading a file
-// *************************************************************************
-
-int lfs_destroy_read(lfs_handle_t *lfs_handle)
-{
-    globus_result_t retval;
-    apr_status_t value;
-
-    GlobusGFSName(lfs_destroy_read);
-
-    apr_thread_join(&value, lfs_handle->backend_thread);
-
-    retval = GLOBUS_SUCCESS;
-
-    // ** Now we can safely close everything
-    if (lfs_handle->is_lio) {
-        retval = gop_sync_exec(gop_lio_close_object(lfs_handle->fd));
-        retval = (OP_STATE_SUCCESS == retval) ? 0 : EIO;
-        if (retval != 0) {
-            STATSD_COUNT("lfs_write_close_failure", 1);
-            GenericError(lfs_handle, "Failed to close file in LFS.", retval);
-            lfs_handle->fd = NULL;
-        }
-        if ((lfs_handle->syslog_host != NULL)) {
-            syslog(LOG_INFO, "lfs_close: ret: %i path: %s", retval,
-                   lfs_handle->pathname_munged);
-        }
-    } else {
-        if ((retval = close(lfs_handle->fd_posix)) != 0) {
-            GenericError(lfs_handle, "Failed to close file in POSIX.", retval);
-            lfs_handle->fd_posix = 0;
-        }
-    }
-
-    lfs_queue_teardown(&(lfs_handle->backend_stack));
-    free(lfs_handle->data_buffer);
-    free(lfs_handle->buffers);
-    apr_pool_destroy(lfs_handle->mpool);
-
-    return(retval);
-}
-// *************************************************************************
+//
 // lfs_read_thread - Thread task for reading data fro mthe backend
-// *************************************************************************
-
+//
 void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
 {
     lfs_handle_t *lfs_handle = (lfs_handle_t *)data;
     Stack_t *stack = lfs_handle->backend_stack.stack;
     apr_thread_cond_t *cond = lfs_handle->backend_stack.cond;
     apr_thread_mutex_t *lock = lfs_handle->backend_stack.lock;
-    apr_time_t read_timer;
     Stack_ele_t *ele;
     lfs_buffer_t *buf;
-    ex_off_t nbytes, nread, nleft, total_left, offset;
-    int i, rc, oops, finished;
+    ex_off_t nbytes, nread, total_left, offset;
+    int i, finished;
+    globus_result_t rc = GLOBUS_SUCCESS;
 
     GlobusGFSName(lfs_read_thread);
-
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Within reader thread.\n");
     // ** Set up the initial position
     total_left = lfs_handle->op_length;
     offset = lfs_handle->offset;
     finished = 0;
 
     log_printf(1, "offset=" XOT " nleft=" XOT "\n", offset, total_left);
-    oops = GLOBUS_SUCCESS;
 
     while ((finished == 0) && (total_left > 0)) {
         // ** Get the next block to process
-        apr_thread_mutex_lock(lock);
-        while ((ele = pop_link(stack)) == NULL) {
-            if (ele == NULL) {
-                apr_thread_cond_wait(cond, lock);  // ** Nothing to do so wait
-                continue;  // ** Try again
-            }
-        }
-        apr_thread_mutex_unlock(lock);
-
-        //ele = pop_link(stack);
-
-        // ** Make sure it's valid data and not an exit sentinel
-        buf = get_stack_ele_data(ele);
-        if (buf == NULL) {  // ** This tells us to kick out
+        if ((ele = lfs_read_get_block(lfs_handle, stack, lock, cond)) == NULL) {
+            // Nothing left on the queue, time to bomb.
             finished = 1;
             continue;
+        } else {
+            buf = get_stack_ele_data(ele);
         }
-
         // ** If we made it here it's time to get the next block
         buf->eof = GLOBUS_SUCCESS;
-        nbytes = (total_left > lfs_handle->buffer_size) ? lfs_handle->buffer_size :
-                 total_left;
-        if (lfs_handle->is_lio == 1) {
-            log_printf(5, "offset=" XOT " nbytes=" XOT "\n", offset, nbytes);
-            STATSD_TIMER_RESET(read_timer);
-            nread = lio_read(lfs_handle->fd, buf->buffer, nbytes, offset, NULL);
-            STATSD_TIMER_POST("read_time", read_timer);
-            STATSD_COUNT("lfs_bytes_read",nread);
-
-        } else {
-            nleft = nbytes;
-            nread = 0;
-            STATSD_TIMER_RESET(read_timer);
-            while ((nread = pread(lfs_handle->fd_posix, buf->buffer + nread, nleft,
-                                  offset + nread)) != -1) {
-                nleft -= nread;
-                if (nleft == 0) break;  // ** Finished so kick out
-            }
-            nread = nbytes - nleft;
-            STATSD_TIMER_POST("read_time", read_timer);
-            STATSD_COUNT("posix_bytes_read",nread);
-        }
-
+        nbytes = (total_left > lfs_handle->buffer_size) ?
+                                                    lfs_handle->buffer_size :
+                                                    total_left;
+        nread = lfs_read_perform_read(lfs_handle, buf, nbytes, offset);
         buf->offset = offset;
         buf->nbytes = nbytes;
 
         // ** Got a problem so kick out with an error
         if (nbytes != nread) {
-            globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
-                                   "Failed to read! offset=" XOT " nbytes=" XOT\
-                                   " nread=" XOT "\n", offset, nbytes,
-                                   nread);
-            SystemError(lfs_handle, "reading from posix", rc);
-            buf->nbytes = 0;
-            buf->offset = 0;
-            // ** This can trigger an error in GridFTP but it's not a bug in
-            // the plugin!
-            buf->eof = GLOBUS_FAILURE;
+            rc = lfs_read_handle_error(buf, offset, nbytes, nread);
             nbytes = offset = 0;
             finished = 1;
-            oops = EREMOTEIO;
-
         }
 
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Register callback\n");
         rc = globus_gridftp_server_register_write(lfs_handle->op,
                 (globus_byte_t *)buf->buffer, nbytes, offset, -1, lfs_finished_read_cb, ele);
-        log_printf(5, "register_write offset=" XOT " nbytes=" XOT " eof=%d rc=%d\n",
-                   buf->offset, buf->nbytes, buf->eof, rc);
+        log_printf(5, "register_write offset=" XOT " nbytes=" XOT " eof=%d rc=%d finished=%d\n",
+                   buf->offset, buf->nbytes, buf->eof, rc, finished);
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done register callback\n");
         if (rc != GLOBUS_SUCCESS) {
             globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to create callback\n");
             finished = 1;
@@ -319,11 +207,10 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
         total_left -= nbytes;
         offset += nbytes;
     }
-
-    // ** Send the sentinel that we are done.
-
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "End write loop\n");
 
     // ** Wind down the transfers
+    log_printf(5, "n_buffers=%d finished=%d\n", lfs_handle->n_buffers, finished);
     for (i=0; i<lfs_handle->n_buffers; i++) {
         apr_thread_mutex_lock(lock);
         while ((ele = pop_link(stack)) == NULL) {
@@ -339,25 +226,33 @@ void *lfs_read_thread(__attribute__((unused)) apr_thread_t *th, void *data)
 
         free(ele);
     }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done winddown\n");
 
     // ** IF we we made it without issues look and see if GridFTP had a problem
-    if (oops == GLOBUS_SUCCESS) oops = lfs_handle->done_status;
-
-    // ** Notify the server we're finished
-//  globus_gridftp_server_finished_transfer(lfs_handle->op, oops);
+    apr_thread_mutex_lock(lfs_handle->lock);
+    if ((lfs_handle->done_status == GLOBUS_SUCCESS) &&
+            (rc != GLOBUS_SUCCESS)) {
+        lfs_handle->done_status = rc;
+    }
+    lfs_handle->backend_done = 1;
+    apr_thread_cond_broadcast(lfs_handle->cond);
+    apr_thread_mutex_unlock(lfs_handle->lock);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done read thread\n");
+    //lfs_finished_read_cb(NULL, 0 , NULL, 0, NULL);
     return(NULL);
 }
 
-// *************************************************************************
-//   lfs_initialize_read - Sets up all the LFS bits for reading a file
-// *************************************************************************
-
-void lfs_initialize_read(lfs_handle_t *lfs_handle)
+//
+// lfs_read_thread_initialize - Prepares and starts backend thread
+//
+#pragma GCC diagnostic warning "-Wunused-variable"
+void lfs_read_thread_initialize(lfs_handle_t *lfs_handle)
 {
     int i;
     Stack_t *stack;
     lfs_buffer_t *buf;
     ex_off_t bsize;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Initialize read thread\n");
 
     // **  Initialize the backend stack
     lfs_queue_init(&(lfs_handle->backend_stack), lfs_handle->mpool);
@@ -397,5 +292,193 @@ void lfs_initialize_read(lfs_handle_t *lfs_handle)
     thread_create_assert(&(lfs_handle->backend_thread), NULL, lfs_read_thread,
                          (void *)lfs_handle, lfs_handle->mpool);
 }
+#pragma GCC diagnostic error "-Wunused-variable"
 
+//
+// lfs_read_thread_destroy - Stops and tears down background reader thread
+//
+int lfs_read_thread_destroy(lfs_handle_t *lfs_handle)
+{
+    GlobusGFSName(lfs_read_thread_destroy);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroy read thread\n");
+
+    apr_status_t value;
+    apr_thread_join(&value, lfs_handle->backend_thread);
+    globus_result_t rc = GLOBUS_SUCCESS;
+    globus_result_t retval = GLOBUS_SUCCESS;
+    char * errstr = NULL;
+
+    // ** Now we can safely close everything
+    if (lfs_handle->is_lio) {
+        retval = gop_sync_exec(gop_lio_close_object(lfs_handle->fd));
+        retval = (OP_STATE_SUCCESS == retval) ? 0 : EIO;
+        if (retval != 0) {
+            errstr = strdup("Failed to close file in LFS");
+            lfs_handle->fd = NULL;
+        }
+        if ((lfs_handle->syslog_host != NULL)) {
+            syslog(LOG_INFO, "lfs_close: ret: %i path: %s", retval,
+                   lfs_handle->pathname_munged);
+        }
+    } else {
+        if ((retval = close(lfs_handle->fd_posix)) != 0) {
+            errstr = strdup("Failed to close file in POSIX");
+            lfs_handle->fd_posix = 0;
+        }
+    }
+
+    if (errstr != NULL) {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "%s\n", errstr);
+        rc = GlobusGFSErrorGeneric(errstr);
+        apr_thread_mutex_lock(lfs_handle->lock);
+        if (lfs_handle->done_status == GLOBUS_SUCCESS) {
+            lfs_handle->done_status = rc;
+        }
+        apr_thread_mutex_unlock(lfs_handle->lock);
+    }
+    lfs_queue_teardown(&(lfs_handle->backend_stack));
+    free(lfs_handle->data_buffer);
+    free(lfs_handle->buffers);
+    apr_pool_destroy(lfs_handle->mpool);
+
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Destroy read thread complete\n");
+
+    return(retval);
+}
+
+//
+// lfs_read_file_open - opens a file from either lfs or the filesystem
+//
+bool lfs_read_file_open(lfs_handle_t * lfs_handle, char ** errstr) {
+    int retval;
+    if (lfs_handle->is_lio) {
+        retval = lio_exists(lfs_handle->fs, lfs_handle->fs->creds,
+                            lfs_handle->pathname_munged);
+        if (retval == 0) {
+            *errstr = strdup("File does not exist");
+            goto cleanup;
+        }
+        if (retval & OS_OBJECT_DIR) {
+            *errstr = strdup("The desired path is a directory");
+            goto cleanup;
+        }
+
+        lfs_handle->fd = NULL;
+        retval = gop_sync_exec(gop_lio_open_object(lfs_handle->fs,
+                                                    lfs_handle->fs->creds,
+                                                    lfs_handle->pathname_munged,
+                                                    lio_fopen_flags("r"), NULL,
+                                                    &(lfs_handle->fd), 60));
+
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from LFS: %s\n",
+                            lfs_handle->pathname_munged);
+        if (lfs_handle->syslog_host != NULL) {
+            syslog(LOG_INFO, "lfs_open: ret: %i path: %s", retval,
+                lfs_handle->pathname_munged);
+        }
+        if (retval != OP_STATE_SUCCESS) {
+            if (errno == EACCES) {
+                *errstr = strdup("Permission denied in open");
+            } else {
+                *errstr = strdup("Unknown LFS error in open");
+            }
+            goto cleanup;
+        }
+
+        //** See if we need to fetch the size
+        if (lfs_handle->op_length == -1) lfs_handle->op_length = lio_size(
+                        lfs_handle->fd);
+    } else {
+        globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Opening from filesystem: %s\n",
+                            lfs_handle->pathname);
+        lfs_handle->fd_posix = open(lfs_handle->pathname, O_RDONLY);
+        if (lfs_handle->fd_posix == -1) {
+            *errstr = strdup("Could not open POSIX file");
+            goto cleanup;
+        }
+        //** See if we need to fetch the size
+        if (lfs_handle->op_length == -1) {
+            lfs_handle->op_length = lseek(lfs_handle->fd_posix, 0, SEEK_END);
+        }
+    }
+    return 0;
+cleanup:
+    return 1;
+}
+
+Stack_ele_t * lfs_read_get_block(lfs_handle_t * lfs_handle,
+                                    Stack_t * stack,
+                                    apr_thread_mutex_t * lock,
+                                    apr_thread_cond_t * cond)
+{
+    Stack_ele_t *ele;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Waiting for block\n");
+    apr_thread_mutex_lock(lock);
+    while ((ele = pop_link(stack)) == NULL) {
+        apr_thread_mutex_lock(lfs_handle->lock);
+        if (lfs_handle->done != 0) {
+            // Time to exit
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Bailing! done=%d\n", lfs_handle->done);
+            if (ele != NULL) push_link(stack, ele);  //** Push it back on the top if needed
+            apr_thread_mutex_unlock(lfs_handle->lock);
+            apr_thread_mutex_unlock(lock);
+            return NULL;
+        }
+        apr_thread_mutex_unlock(lfs_handle->lock);
+
+        if (ele == NULL) {
+            apr_thread_cond_wait(cond, lock);  // ** Nothing to do so wait
+            continue;  // ** Try again
+        }
+    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done waiting for block\n");
+    apr_thread_mutex_unlock(lock);
+    return ele;
+}
+
+ex_off_t lfs_read_perform_read(lfs_handle_t * lfs_handle,
+                                lfs_buffer_t * buf,
+                                ex_off_t nbytes,
+                                ex_off_t offset)
+{
+    ex_off_t nleft, nread;
+    apr_time_t read_timer;
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Writing block\n");
+    if (lfs_handle->is_lio == 1) {
+        log_printf(5, "offset=" XOT " nbytes=" XOT "\n", offset, nbytes);
+        STATSD_TIMER_RESET(read_timer);
+        nread = lio_read(lfs_handle->fd, buf->buffer, nbytes, offset, NULL);
+        STATSD_TIMER_POST("read_time", read_timer);
+        STATSD_COUNT("lfs_bytes_read",nread);
+    } else {
+        nleft = nbytes;
+        nread = 0;
+        STATSD_TIMER_RESET(read_timer);
+        while ((nread = pread(lfs_handle->fd_posix, buf->buffer + nread, nleft,
+                                offset + nread)) != -1) {
+            nleft -= nread;
+            if (nleft == 0) break;  // ** Finished so kick out
+        }
+        nread = nbytes - nleft;
+        STATSD_TIMER_POST("read_time", read_timer);
+        STATSD_COUNT("posix_bytes_read",nread);
+    }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Done writing block\n");
+    return nread;
+}
+globus_result_t lfs_read_handle_error(lfs_buffer_t * buf,
+                                        ex_off_t offset,
+                                        ex_off_t nbytes,
+                                        ex_off_t nread) {
+    GlobusGFSName(lfs_read_handle_error);
+    globus_result_t rc = GlobusGFSErrorGeneric("Could not read");
+    globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
+                                   "Failed to read! offset=" XOT " nbytes=" XOT\
+                                   " nread=" XOT "\n", offset, nbytes,
+                                   nread);
+    buf->nbytes = 0;
+    buf->offset = 0;
+    buf->eof = rc;
+    return rc;
+}
 
