@@ -115,7 +115,7 @@ struct globus_l_gfs_lfs_handle_s {
 
     apr_thread_t *        backend_thread;       // ** The backend reading or writing thread to LIO
     apr_thread_t **       cksum_thread;         // ** Checksum worker threads
-    atomic_int_t          inflight_count;       // ** Number of inflight buffers
+    //atomic_int_t          inflight_count;       // ** Number of inflight buffers
     atomic_int_t          io_count;             // ** Number of data blocks containing data
     char                  adler32_human[2*sizeof(uLong)+1];  // ** Human readable version of adler32 checksum
     char *                data_buffer;          // ** Pointer to athe actual large data buffer which gets parcelled out in buffers
@@ -160,11 +160,18 @@ struct globus_l_gfs_lfs_handle_s {
     lio_config_t *        fs;                   // ** LIO context
     lio_fd_t *            fd;                   // ** LIO file handle
     unsigned int          mount_point_len;
+    int                   inflight_count;
+    int                   backend_counter;
+    int                   checksum_counter;
+    int                   gridftp_counter;
+    int                   buffered_counter;
 };
 
 #define MSG_SIZE 1024
 extern char err_msg[MSG_SIZE];
 
+void change_and_check(lfs_handle_t * lfs_handle, int backend, int checksum,
+                        int gridftp, int handling, int inflight_count);
 // figure out if a path if LFS based
 bool is_lfs_path(const lfs_handle_t * lfs_handle, const char * path);
 void munge_lfs_path(const lfs_handle_t * lfs_handle, char ** path);

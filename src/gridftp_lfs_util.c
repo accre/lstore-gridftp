@@ -63,7 +63,10 @@ void lfs_queue_teardown(lfs_queue_t *s)
  ************************************************************************/
 inline globus_bool_t is_done(lfs_handle_t *lfs_handle)
 {
-    return lfs_handle->done > 0;
+    apr_thread_mutex_lock(lfs_handle->lock);
+    globus_bool_t ret = lfs_handle->done > 0;
+    apr_thread_mutex_unlock(lfs_handle->lock);
+    return ret;
 }
 
 /*************************************************************************
@@ -73,7 +76,10 @@ inline globus_bool_t is_done(lfs_handle_t *lfs_handle)
  ************************************************************************/
 inline globus_bool_t is_close_done(lfs_handle_t *lfs_handle)
 {
-    return lfs_handle->done == 2;
+    apr_thread_mutex_lock(lfs_handle->lock);
+    globus_bool_t ret = lfs_handle->done == 2;
+    apr_thread_mutex_unlock(lfs_handle->lock);
+    return ret;
 }
 
 /*************************************************************************
@@ -86,13 +92,21 @@ inline globus_bool_t is_close_done(lfs_handle_t *lfs_handle)
 inline void set_done(lfs_handle_t *lfs_handle, globus_result_t rc)
 {
     globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Setting done from %i\n",
-                                                lfs_handle->done);
+                                lfs_handle->done);
     // Ignore already-done handles.
-    if (is_done(lfs_handle) && (lfs_handle->done_status != GLOBUS_SUCCESS)) {
+    if (is_done(lfs_handle)) {
         return;
     }
+    apr_thread_mutex_lock(lfs_handle->lock);
+    // Don't update the done status if it's already got an error
+    if (lfs_handle->done_status == GLOBUS_SUCCESS) {
+        lfs_handle->done_status = rc;
+    }
     lfs_handle->done = (lfs_handle->done == 0) ? 1 : lfs_handle->done;
-    lfs_handle->done_status = rc;
+    apr_thread_cond_broadcast(lfs_handle->cond);
+    apr_thread_cond_broadcast(lfs_handle->backend_stack.cond);
+    apr_thread_cond_broadcast(lfs_handle->cksum_stack.cond);
+    apr_thread_mutex_unlock(lfs_handle->lock);
 }
 
 // Helper function to keep errstr propagated. Follows the following semantics,

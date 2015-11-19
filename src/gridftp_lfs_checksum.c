@@ -92,7 +92,6 @@ void *lfs_cksum_thread(__attribute__((unused)) apr_thread_t *th, void *data)
 
         // ** Make sure it's valid data and not an exit sentinel
         buf = get_stack_ele_data(ele);
-        log_printf(1, "processing.  ptr=%p\n", buf);
         if (buf == NULL) {  // ** This tells us to kick out
             finished = 1;
             free(ele);
@@ -112,6 +111,7 @@ void *lfs_cksum_thread(__attribute__((unused)) apr_thread_t *th, void *data)
         push_link(writer->stack, ele);
         apr_thread_cond_signal(writer->cond);
         apr_thread_mutex_unlock(writer->lock);
+        change_and_check(lfs_handle, 1, -1, 0, 0, 0);
     }
 
     // ** Notify them I'm finished
@@ -119,7 +119,6 @@ void *lfs_cksum_thread(__attribute__((unused)) apr_thread_t *th, void *data)
     lfs_handle->n_cksum_threads--;
     apr_thread_cond_signal(lfs_handle->cond);
     apr_thread_mutex_unlock(lfs_handle->lock);
-
     return(NULL);
 }
 

@@ -62,6 +62,7 @@ void lfs_send(globus_gfs_operation_t op,
 
 cleanup:
     rc = GlobusGFSErrorGeneric(errstr);
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "SET DONE 3\n");
     set_done(lfs_handle, rc);
     globus_gfs_log_message(GLOBUS_GFS_LOG_ERR, "Failed to open file\n");
     globus_gridftp_server_finished_transfer(op, rc);
@@ -89,17 +90,11 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
     
     ex_off_t offset = buf->offset;
 
-    log_printf(1, "fname=%s nbytes=" XOT " eof=%d\n", lfs_handle->pathname, nbytes,
-               rc);
-
     // ** Notify the backend that we are ready for more
     apr_thread_mutex_lock(lfs_handle->backend_stack.lock);
     push_link(lfs_handle->backend_stack.stack, ele);
     apr_thread_cond_broadcast(lfs_handle->backend_stack.cond);
     apr_thread_mutex_unlock(lfs_handle->backend_stack.lock);
-
-    log_printf(1, "offset=" XOT " last=" XOT "\n", offset,
-               lfs_handle->last_block_offset);
 
     if ((nbytes != (unsigned) lfs_handle->buffer_size) ||
             (lfs_handle->last_block_offset == offset) ||
@@ -108,23 +103,24 @@ static void lfs_finished_read_cb(__attribute__((unused)) globus_gfs_operation_t 
         apr_thread_mutex_lock(lfs_handle->lock);
         if (lfs_handle->done_status != GLOBUS_SUCCESS) {
             // If done_status is already an error, we want to preseve it
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "SET DONE 1\n");
             set_done(lfs_handle, lfs_handle->done_status);
         } else {
             // Otherwise, set it to the error code we just got
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "SET DONE 2\n");
             set_done(lfs_handle, rc);
         }
         apr_thread_mutex_unlock(lfs_handle->lock);
-        log_printf(1, "Triggering shutdown.  rc=%d GLOBUS_SUCCESS=%d\n",
-                        lfs_handle->done_status,
-                        GLOBUS_SUCCESS);
+        goto teardown;
     }
+    return;
 teardown:
     if (lfs_handle) {
         apr_thread_mutex_lock(lfs_handle->lock);
-        log_printf(1, "done=%d backend_done=%d\n", lfs_handle->done, lfs_handle->backend_done);
         //** Not  sure if this TEST is needed.  I think the way the code is structured now
         //** The boolean below is always true......
         if (lfs_handle->done != 2) {
+            globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "HANDLE DONE - 2\n");
             lfs_handle->done = 2;
             //** Release the lock because lfs_read_thread_destroy may use it
             apr_thread_mutex_unlock(lfs_handle->lock);
@@ -256,6 +252,7 @@ void lfs_read_thread_initialize(lfs_handle_t *lfs_handle)
 
     // **  Initialize the backend stack
     lfs_queue_init(&(lfs_handle->backend_stack), lfs_handle->mpool);
+    lfs_queue_init(&(lfs_handle->cksum_stack), lfs_handle->mpool);
     bsize = lfs_handle->total_buffer_size / lfs_handle->send_stages;
     // ** This gives us an estimate for the number of "blocks"
     bsize /= lfs_handle->gridftp_buffer_size;
@@ -274,7 +271,7 @@ void lfs_read_thread_initialize(lfs_handle_t *lfs_handle)
     if (i == 0) lfs_handle->last_block_offset--;
     lfs_handle->last_block_offset *= bsize;
 
-    atomic_set(lfs_handle->inflight_count, lfs_handle->n_buffers);
+    lfs_handle->inflight_count = lfs_handle->n_buffers;
 
     // ** Make the buffers and submit the initial set of tasks
     type_malloc(lfs_handle->data_buffer, char,

@@ -39,7 +39,7 @@ static globus_gfs_storage_iface_t globus_l_gfs_lfs_dsi_iface = {
     NULL, /* list */
     lfs_send,
     lfs_recv,
-    lfs_trev, /* trev */
+    NULL, //    lfs_trev, /* trev */
     NULL, /* active */
     NULL, /* passive */
     NULL, /* data destroy */
