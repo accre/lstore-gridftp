@@ -154,6 +154,7 @@ struct globus_l_gfs_lfs_handle_s {
     int                   n_cksum_threads;      // ** Number of checksum threads
     int                   load_limit;
     int                   send_stages;          // ** Number of read stages
+    int                   optimal_count;
     lfs_buffer_t *        buffers;              // ** Array of write buffers
     lfs_queue_t           backend_stack;        // ** backend write/read buffer stack
     lfs_queue_t           cksum_stack;          // ** Buffer's that need checksummed stack

@@ -91,12 +91,13 @@ inline globus_bool_t is_close_done(lfs_handle_t *lfs_handle)
  ************************************************************************/
 inline void set_done(lfs_handle_t *lfs_handle, globus_result_t rc)
 {
-    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Setting done from %i\n",
-                                lfs_handle->done);
+    assert(0);
     // Ignore already-done handles.
     if (is_done(lfs_handle)) {
         return;
     }
+    globus_gfs_log_message(GLOBUS_GFS_LOG_INFO, "Setting done from %i\n",
+                                lfs_handle->done);
     apr_thread_mutex_lock(lfs_handle->lock);
     // Don't update the done status if it's already got an error
     if (lfs_handle->done_status == GLOBUS_SUCCESS) {

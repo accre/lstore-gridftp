@@ -91,7 +91,6 @@ static void lfs_handle_write_op(globus_gfs_operation_t op,
         set_done(lfs_handle, result);
         return;
     } else if (eof) {
-        assert(0);
         set_done(lfs_handle, GLOBUS_SUCCESS);
     }
 
@@ -184,6 +183,9 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
 
         // Now that we have a block, see if it has real data
         buf = get_stack_ele_data(ele);
+        if (!buf) {
+            break;
+        }
         if (buf->nbytes > 0) {
             // Got a read, pop it into the buffers for eventual writing
             n_holding++;
@@ -414,7 +416,6 @@ static globus_result_t lfs_write_finish_transfer(lfs_handle_t *lfs_handle)
     
     retval = lfs_write_close(lfs_handle);
     
-    free(lfs_handle->pathname_munged);
     free(lfs_handle->data_buffer);
     free(lfs_handle->buffers);
     apr_pool_destroy(lfs_handle->mpool);
@@ -443,7 +444,7 @@ globus_result_t lfs_init_gridftp_stack(lfs_handle_t * lfs_handle) {
                 (globus_byte_t *)buf->buffer, lfs_handle->buffer_size, lfs_handle_write_op,
                 (void *) ele);
         if (rc != GLOBUS_SUCCESS) {
-            set_done(lfs_handle, rc);
+            //set_done(lfs_handle, rc);
             free(ele);  // ** Just free the stack structure
         } else {
             change_and_check(lfs_handle, 0, 0, 1, 0, 1);
