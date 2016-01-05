@@ -58,9 +58,10 @@ GlobusExtensionDefineModule(globus_gridftp_server_lfs) = {
     "globus_gridftp_server_lfs",
     lfs_activate,
     lfs_deactivate,
-    NULL,
-    NULL,
-    &gridftp_lfs_local_version
+    NULL, /* atexit_func */
+    NULL, /* get_pointer_func */
+    &gridftp_lfs_local_version,
+    NULL /* friendly_error_func */
 };
 
 /*

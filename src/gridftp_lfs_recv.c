@@ -515,7 +515,7 @@ void *lfs_write_thread(__attribute__((unused)) apr_thread_t * th, void *data)
                     np = pwritev(lfs_handle->fd_posix, iovec + n_start, n_iov - n_start, c->lo);
                     if (np < 0) {
                         globus_gfs_log_message(GLOBUS_GFS_LOG_ERR,
-                                               "Failed writing to posix file! err=%d off=" XOT " len= " XOT "\n", rc, c->lo,
+                                               "Failed writing to posix file! err=%d (errno=%d : %s) off=" XOT " len= " XOT "\n", np, errno, strerror(errno), c->lo,
                                                c->len);
                         lfs_handle->done_status = GLOBUS_FAILURE;
                         break;

@@ -58,7 +58,7 @@ void lfs_command(globus_gfs_operation_t  op,
         PathName_munged++;
     }
 
-    GlobusGFSErrorSystemError("command", ENOSYS);
+    result = GlobusGFSErrorSystemError("command", ENOSYS); /* default error for undefined commands */
     switch (cmd_info->command) {
     case GLOBUS_GFS_CMD_MKD: {
         STATSD_COUNT("mkdir",1);
